@@ -47,83 +47,81 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+/* Command Center design tokens — dark-only theme */
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.809 0.105 251.813);
-  --chart-2: oklch(0.623 0.214 259.815);
-  --chart-3: oklch(0.546 0.245 262.881);
-  --chart-4: oklch(0.488 0.243 264.376);
-  --chart-5: oklch(0.424 0.199 265.638);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
-}
+  /* Background layers */
+  --cc-bg-base: 9 9 11;        /* zinc-950 */
+  --cc-bg-panel: 24 24 27;     /* zinc-900 */
+  --cc-bg-elevated: 39 39 42;  /* zinc-800 */
 
-.dark {
-  --background: oklch(0.145 0 0);
+  /* Borders */
+  --cc-border: 63 63 70;       /* zinc-700 */
+  --cc-border-subtle: 39 39 42; /* zinc-800 */
+
+  /* Text */
+  --cc-text-primary: 250 250 250;   /* zinc-50 */
+  --cc-text-secondary: 161 161 170; /* zinc-400 */
+  --cc-text-muted: 113 113 122;     /* zinc-500 */
+
+  /* Accent */
+  --cc-accent: 99 102 241;     /* indigo-500 */
+
+  /* Status colors */
+  --cc-status-backlog: 113 113 122;   /* zinc-500 */
+  --cc-status-in-progress: 59 130 246; /* blue-500 */
+  --cc-status-review: 245 158 11;     /* amber-500 */
+  --cc-status-done: 34 197 94;        /* green-500 */
+  --cc-status-blocked: 239 68 68;     /* red-500 */
+  --cc-status-recurring: 168 85 247;  /* purple-500 */
+
+  /* shadcn dark theme applied as default (no light mode) */
+  --background: oklch(0.09 0 0);
   --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
+  --card: oklch(0.12 0 0);
   --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
+  --popover: oklch(0.14 0 0);
   --popover-foreground: oklch(0.985 0 0);
   --primary: oklch(0.922 0 0);
   --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
+  --secondary: oklch(0.20 0 0);
   --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
+  --muted: oklch(0.20 0 0);
+  --muted-foreground: oklch(0.60 0 0);
+  --accent: oklch(0.55 0.18 264);
   --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.25 0 0);
+  --input: oklch(0.22 0 0);
+  --ring: oklch(0.55 0.18 264);
   --chart-1: oklch(0.809 0.105 251.813);
   --chart-2: oklch(0.623 0.214 259.815);
   --chart-3: oklch(0.546 0.245 262.881);
   --chart-4: oklch(0.488 0.243 264.376);
   --chart-5: oklch(0.424 0.199 265.638);
-  --sidebar: oklch(0.205 0 0);
+  --radius: 0.5rem;
+  --sidebar: oklch(0.07 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary: oklch(0.55 0.18 264);
   --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent: oklch(0.18 0 0);
   --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --sidebar-border: oklch(0.20 0 0);
+  --sidebar-ring: oklch(0.55 0.18 264);
 }
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
   }
+
+  html,
+  body {
+    background-color: rgb(9 9 11); /* zinc-950 — prevents any white flash */
+    color: rgb(250 250 250);
+    @apply font-sans;
+  }
+
   body {
     @apply bg-background text-foreground;
-  }
-  html {
-    @apply font-sans;
   }
 }
