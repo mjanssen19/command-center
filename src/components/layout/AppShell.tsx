@@ -1,5 +1,6 @@
 import { Sidebar } from './Sidebar'
 import { TopBar } from './TopBar'
+import { CommandBarWrapper } from '../search/CommandBarWrapper'
 
 interface AppShellProps {
   children: React.ReactNode
@@ -15,6 +16,7 @@ export function AppShell({ children }: AppShellProps) {
           <div className="max-w-[1400px] mx-auto px-6 py-6">{children}</div>
         </main>
       </div>
+      <CommandBarWrapper />
     </div>
   )
 }

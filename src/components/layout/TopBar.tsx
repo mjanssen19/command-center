@@ -3,6 +3,7 @@
 import { usePathname } from 'next/navigation'
 import { Search } from 'lucide-react'
 import { usePaperclip } from '@/lib/paperclip'
+import { useCallback } from 'react'
 
 function getBreadcrumb(pathname: string): string {
   const segment = pathname.split('/').filter(Boolean)[0] ?? 'dashboard'
@@ -21,6 +22,17 @@ export function TopBar() {
   const { status } = usePaperclip()
   const config = statusConfig[status]
 
+  const openCommandBar = useCallback(() => {
+    // Dispatch a synthetic Cmd+K event to trigger the command bar
+    document.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'k',
+        metaKey: true,
+        bubbles: true,
+      })
+    )
+  }, [])
+
   return (
     <header className="h-[52px] shrink-0 flex items-center justify-between px-5 bg-zinc-950 border-b border-zinc-800">
       {/* Left: breadcrumb */}
@@ -31,6 +43,7 @@ export function TopBar() {
         {/* Cmd+K search trigger */}
         <button
           type="button"
+          onClick={openCommandBar}
           className="flex items-center gap-2 px-3 py-1.5 rounded-md border border-zinc-800 bg-zinc-900 text-zinc-500 text-xs hover:border-zinc-700 hover:text-zinc-400 transition-colors"
           aria-label="Open command bar"
         >
