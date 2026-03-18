@@ -29,6 +29,7 @@ export interface Document {
   agentId?: string
   indexedAt: string
   mtime: string
+  size: number
 }
 
 export interface Memory {
@@ -46,19 +47,21 @@ export interface Memory {
 export interface ScheduleJob {
   id: string
   name: string
-  cron: string
+  cron: string | null
   nextRun: string | null
   lastRun: string | null
   status: 'active' | 'paused' | 'error'
   linkedProject?: string
   linkedAgent?: string
+  description: string
+  createdAt: string
 }
 
 export interface ActivityEvent {
   id: string
   type: string
   entityType: EntityType
-  entityId: string
+  entityId: string | null
   summary: string
   timestamp: string
   agentId?: string
@@ -69,7 +72,7 @@ export interface Person {
   name: string
   role: string
   email?: string
-  notes?: string
+  notes: string
   createdAt: string
 }
 
@@ -78,16 +81,19 @@ export interface ContentItem {
   title: string
   type: string
   status: 'idea' | 'draft' | 'review' | 'scheduled' | 'published'
-  channel?: string
+  channel: string
+  body: string
   publishedAt?: string
   linkedAgent?: string
+  createdAt: string
 }
 
 export interface FeedbackItem {
   id: string
-  type: 'rejection' | 'review_note' | 'post_mortem' | 'rating' | 'critique'
+  type: string
   content: string
-  entityRef?: string
+  entityType?: string
+  entityId?: string
   agentId?: string
   timestamp: string
 }
@@ -109,6 +115,14 @@ export interface EntityLink {
   toId: string
   relationship: string
   confidence: number
+}
+
+// Search result from FTS5
+export interface SearchResult {
+  entityType: EntityType
+  entityId: string
+  title: string
+  body: string
 }
 
 // Paperclip entity stubs (read-only, from Paperclip API)

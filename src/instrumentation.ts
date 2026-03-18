@@ -1,6 +1,10 @@
 export async function register() {
   if (process.env.NEXT_RUNTIME === 'nodejs') {
-    const { startIndexer } = await import('./lib/indexing/indexer')
-    startIndexer()
+    try {
+      const { startIndexer } = await import('./lib/indexing/indexer')
+      startIndexer()
+    } catch (err) {
+      console.error('[instrumentation] Failed to start indexer:', err)
+    }
   }
 }
