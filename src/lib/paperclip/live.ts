@@ -30,6 +30,12 @@ export function usePaperclipLive(companyId?: string) {
             if (type.startsWith('heartbeat.')) {
               queryClient.invalidateQueries({ queryKey: ['paperclip', 'runs'] })
               queryClient.invalidateQueries({ queryKey: ['paperclip', 'agents'] })
+              queryClient.invalidateQueries({ queryKey: ['paperclip', 'issues'] })
+            }
+            if (type.startsWith('issue.')) {
+              queryClient.invalidateQueries({ queryKey: ['paperclip', 'issues'] })
+              queryClient.invalidateQueries({ queryKey: ['paperclip', 'issue'] })
+              queryClient.invalidateQueries({ queryKey: ['paperclip', 'comments'] })
             }
             if (type.startsWith('activity.')) {
               queryClient.invalidateQueries({ queryKey: ['paperclip', 'activity'] })
