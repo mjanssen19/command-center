@@ -1,3 +1,5 @@
+'use client'
+
 import Link from 'next/link'
 import {
   CheckSquare,
@@ -8,6 +10,7 @@ import {
   FileText,
 } from 'lucide-react'
 import { PageHeader } from '@/components/common/PageHeader'
+import { usePaperclip } from '@/lib/paperclip'
 
 const quickLinks = [
   {
@@ -48,7 +51,21 @@ const quickLinks = [
   },
 ]
 
+const statusConfig = {
+  connected: { color: 'bg-green-500', label: 'Connected' },
+  disconnected: { color: 'bg-red-500', label: 'Offline' },
+  unknown: { color: 'bg-zinc-600', label: 'Checking...' },
+} as const
+
 export default function DashboardPage() {
+  const { status, company } = usePaperclip()
+  const paperclipConfig = statusConfig[status]
+
+  const paperclipLabel =
+    status === 'connected' && company
+      ? `Paperclip: ${company.name}`
+      : `Paperclip: ${paperclipConfig.label}`
+
   return (
     <div>
       <PageHeader
@@ -87,8 +104,8 @@ export default function DashboardPage() {
         </p>
         <div className="flex flex-wrap gap-4">
           <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-zinc-600" />
-            <span className="text-sm text-zinc-400">Paperclip: Not connected</span>
+            <div className={`w-2 h-2 rounded-full ${paperclipConfig.color}`} />
+            <span className="text-sm text-zinc-400">{paperclipLabel}</span>
           </div>
           <div className="flex items-center gap-2">
             <div className="w-2 h-2 rounded-full bg-zinc-600" />

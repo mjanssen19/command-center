@@ -3,6 +3,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useState } from 'react'
 import { AppShell } from '@/components/layout/AppShell'
+import { PaperclipProvider } from '@/lib/paperclip'
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(
@@ -19,7 +20,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   return (
     <QueryClientProvider client={queryClient}>
-      <AppShell>{children}</AppShell>
+      <PaperclipProvider>
+        <AppShell>{children}</AppShell>
+      </PaperclipProvider>
     </QueryClientProvider>
   )
 }

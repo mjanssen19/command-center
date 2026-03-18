@@ -2,15 +2,24 @@
 
 import { usePathname } from 'next/navigation'
 import { Search } from 'lucide-react'
+import { usePaperclip } from '@/lib/paperclip'
 
 function getBreadcrumb(pathname: string): string {
   const segment = pathname.split('/').filter(Boolean)[0] ?? 'dashboard'
   return segment.charAt(0).toUpperCase() + segment.slice(1)
 }
 
+const statusConfig = {
+  connected: { color: 'bg-green-500', label: 'Connected' },
+  disconnected: { color: 'bg-red-500', label: 'Offline' },
+  unknown: { color: 'bg-zinc-600', label: 'Unknown' },
+} as const
+
 export function TopBar() {
   const pathname = usePathname()
   const title = getBreadcrumb(pathname)
+  const { status } = usePaperclip()
+  const config = statusConfig[status]
 
   return (
     <header className="h-[52px] shrink-0 flex items-center justify-between px-5 bg-zinc-950 border-b border-zinc-800">
@@ -32,9 +41,12 @@ export function TopBar() {
           </kbd>
         </button>
 
-        {/* Paperclip status dot — placeholder until Phase 3 */}
-        <div className="flex items-center gap-1.5" title="Paperclip: not connected">
-          <div className="w-2 h-2 rounded-full bg-zinc-600" />
+        {/* Paperclip status dot */}
+        <div
+          className="flex items-center gap-1.5"
+          title={`Paperclip: ${config.label}`}
+        >
+          <div className={`w-2 h-2 rounded-full ${config.color}`} />
           <span className="text-xs text-zinc-600 hidden sm:inline">Paperclip</span>
         </div>
       </div>
