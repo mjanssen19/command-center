@@ -1,36 +1,63 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Command Center
 
-## Getting Started
+Local-first operations dashboard for OpenClaw and Paperclip.
 
-First, run the development server:
+## What is this?
+
+Command Center is a unified dashboard that brings together agent activity, task management, and local file indexing into a single interface. It connects to [Paperclip](https://github.com/mjanssen19/paperclip) for AI agent orchestration data and [OpenClaw](https://github.com/mjanssen19/openclaw) for local workspace file indexing, giving you a real-time view of everything happening across your projects.
+
+> Screenshots coming soon.
+
+## Tech Stack
+
+- **Framework**: Next.js 15 (App Router)
+- **Language**: TypeScript
+- **Styling**: Tailwind CSS + shadcn/ui
+- **Database**: SQLite (local-first)
+- **Data fetching**: TanStack Query
+
+## Prerequisites
+
+- Node.js 20+
+- npm 10+
+
+Optional:
+- [Paperclip](https://github.com/mjanssen19/paperclip) — for agent data and task management
+- [OpenClaw](https://github.com/mjanssen19/openclaw) — for local file indexing
+
+## Quick Start
 
 ```bash
+git clone https://github.com/mjanssen19/command-center.git
+cd command-center
+cp .env.example .env.local
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Then open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Environment Variables
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+See [`.env.example`](.env.example) for all available configuration options.
 
-## Learn More
+| Variable | Required | Description |
+|---|---|---|
+| `PAPERCLIP_API_URL` | Yes | URL of your Paperclip instance (default: `http://localhost:3100`) |
+| `PAPERCLIP_API_KEY` | Yes | API key for Paperclip authentication |
+| `OPENCLAW_WORKSPACE_PATH` | Yes | Absolute path to the OpenClaw workspace directory |
+| `MEM0_API_KEY` | No | Mem0 integration key (Phase 9) |
+| `SUPERMEMORY_API_KEY` | No | Supermemory integration key (Phase 9) |
+| `CALENDAR_ICS_URL` | No | ICS calendar feed URL (Phase 9) |
 
-To learn more about Next.js, take a look at the following resources:
+## Deployment
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+The app auto-deploys to the production server via GitHub Actions on every push to `main`. The server is accessible over Tailscale. See [`docs/server-setup.md`](docs/server-setup.md) for initial server configuration.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Architecture
 
-## Deploy on Vercel
+See [`plan.md`](../plan.md) for the full phase breakdown and architectural decisions.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## License
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+[MIT](LICENSE)
