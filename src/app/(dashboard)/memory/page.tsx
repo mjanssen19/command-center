@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { Brain, Search, Star, Tag, Clock, Cpu, FolderOpen } from 'lucide-react'
 import { PageHeader } from '@/components/common/PageHeader'
 import { EmptyState } from '@/components/common/EmptyState'
@@ -21,8 +21,9 @@ const TYPE_COLORS: Record<string, string> = {
 
 const SOURCE_COLORS: Record<string, string> = {
   'local file': 'bg-zinc-700/50 text-zinc-400 border-zinc-600/30',
-  mem0: 'bg-green-500/20 text-green-400 border-green-500/30',
-  supermemory: 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30',
+  local: 'bg-zinc-700/50 text-zinc-400 border-zinc-600/30',
+  mem0: 'bg-violet-500/20 text-violet-400 border-violet-500/30',
+  supermemory: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
 }
 
 function formatDate(dateStr: string): string {
@@ -115,22 +116,103 @@ function MemoryEntry({ memory }: { memory: Memory }) {
   )
 }
 
+interface Mem0Memory {
+  id: string
+  content: string
+  metadata?: Record<string, unknown>
+  created_at: string
+}
+
+interface SupermemoryItem {
+  id: string
+  content: string
+  source?: string
+  created_at: string
+}
+
+function useExternalMemories() {
+  const [mem0, setMem0] = useState<Memory[]>([])
+  const [supermemory, setSupermemory] = useState<Memory[]>([])
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function load() {
+      // Fetch both in parallel
+      const [mem0Res, smRes] = await Promise.allSettled([
+        fetch('/api/integrations?type=mem0').then((r) => (r.ok ? r.json() : [])),
+        fetch('/api/integrations?type=supermemory').then((r) => (r.ok ? r.json() : [])),
+      ])
+
+      if (cancelled) return
+
+      const mem0Data: Mem0Memory[] =
+        mem0Res.status === 'fulfilled' ? (mem0Res.value as Mem0Memory[]) : []
+      const smData: SupermemoryItem[] =
+        smRes.status === 'fulfilled' ? (smRes.value as SupermemoryItem[]) : []
+
+      // Convert Mem0 to Memory shape
+      setMem0(
+        mem0Data.map((m) => ({
+          id: `mem0-${m.id}`,
+          date: m.created_at?.slice(0, 10) ?? '',
+          type: 'observation',
+          source: 'Mem0',
+          content: m.content,
+          tags: [],
+          createdAt: m.created_at ?? new Date().toISOString(),
+        }))
+      )
+
+      // Convert Supermemory to Memory shape
+      setSupermemory(
+        smData.map((m) => ({
+          id: `sm-${m.id}`,
+          date: m.created_at?.slice(0, 10) ?? '',
+          type: 'observation',
+          source: 'Supermemory',
+          content: m.content,
+          tags: [],
+          createdAt: m.created_at ?? new Date().toISOString(),
+        }))
+      )
+    }
+
+    load()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  return { mem0, supermemory }
+}
+
 export default function MemoryPage() {
   const { data: memories } = useLocalData<Memory>('memories')
+  const { mem0, supermemory } = useExternalMemories()
   const [search, setSearch] = useState('')
 
+  // Merge all memory sources
+  const allMemories = useMemo(() => {
+    const local = (memories ?? []).map((m) => ({
+      ...m,
+      source: m.source || 'Local',
+    }))
+    return [...local, ...mem0, ...supermemory]
+  }, [memories, mem0, supermemory])
+
   const filtered = useMemo(() => {
-    if (!memories) return []
+    if (!allMemories.length) return []
     const q = search.toLowerCase().trim()
-    if (!q) return memories
-    return memories.filter(
+    if (!q) return allMemories
+    return allMemories.filter(
       (m) =>
         m.content?.toLowerCase().includes(q) ||
         m.type?.toLowerCase().includes(q) ||
         m.source?.toLowerCase().includes(q) ||
         m.tags?.some((t) => t.toLowerCase().includes(q))
     )
-  }, [memories, search])
+  }, [allMemories, search])
 
   // Group by day, most recent first
   const grouped = useMemo(() => {
@@ -152,23 +234,21 @@ export default function MemoryPage() {
 
   // Long-term / pinned memories
   const longTermMemories = useMemo(() => {
-    if (!memories) return []
-    return memories.filter((m) => m.type === 'long-term')
-  }, [memories])
+    return allMemories.filter((m) => m.type === 'long-term')
+  }, [allMemories])
 
   // Metrics
-  const totalMemories = memories?.length ?? 0
+  const totalMemories = allMemories.length
   const todayCount = useMemo(() => {
-    if (!memories) return 0
     const today = new Date().toISOString().slice(0, 10)
-    return memories.filter((m) => dayKey(m.createdAt) === today).length
-  }, [memories])
+    return allMemories.filter((m) => dayKey(m.createdAt) === today).length
+  }, [allMemories])
   const uniqueTypes = useMemo(() => {
-    if (!memories) return 0
-    return new Set(memories.map((m) => m.type)).size
-  }, [memories])
+    return new Set(allMemories.map((m) => m.type)).size
+  }, [allMemories])
+  const externalCount = mem0.length + supermemory.length
 
-  const hasData = memories && memories.length > 0
+  const hasData = allMemories.length > 0
 
   return (
     <div className="flex flex-col h-full">
@@ -182,7 +262,11 @@ export default function MemoryPage() {
         <MetricCard label="Total Entries" value={totalMemories} />
         <MetricCard label="Today" value={todayCount} />
         <MetricCard label="Long-term" value={longTermMemories.length} />
-        <MetricCard label="Types" value={uniqueTypes} />
+        {externalCount > 0 ? (
+          <MetricCard label="External" value={externalCount} />
+        ) : (
+          <MetricCard label="Types" value={uniqueTypes} />
+        )}
       </div>
 
       {!hasData ? (

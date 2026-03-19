@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import {
   CalendarDays,
   ChevronLeft,
@@ -24,7 +24,7 @@ interface CalendarEvent {
   id: string
   title: string
   date: string // YYYY-MM-DD
-  type: 'task' | 'schedule' | 'milestone'
+  type: 'task' | 'schedule' | 'milestone' | 'external'
   source: string
   meta?: string
 }
@@ -33,6 +33,7 @@ const EVENT_COLORS: Record<string, { dot: string; bg: string; text: string }> = 
   task: { dot: 'bg-blue-500', bg: 'bg-blue-500/10', text: 'text-blue-400' },
   schedule: { dot: 'bg-violet-500', bg: 'bg-violet-500/10', text: 'text-violet-400' },
   milestone: { dot: 'bg-amber-500', bg: 'bg-amber-500/10', text: 'text-amber-400' },
+  external: { dot: 'bg-zinc-400', bg: 'bg-zinc-500/10', text: 'text-zinc-400' },
 }
 
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -134,10 +135,37 @@ function EventItem({ event }: { event: CalendarEvent }) {
   )
 }
 
+interface ExternalCalendarEvent {
+  id: string
+  title: string
+  start: string
+  end?: string
+  location?: string
+  description?: string
+}
+
+function useExternalCalendarEvents() {
+  const [events, setEvents] = useState<ExternalCalendarEvent[]>([])
+
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/integrations?type=calendar')
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data: ExternalCalendarEvent[]) => {
+        if (!cancelled) setEvents(Array.isArray(data) ? data : [])
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
+  return events
+}
+
 export default function CalendarPage() {
   const { companyId } = usePaperclip()
   const { data: issues } = useIssues(companyId)
   const { data: scheduleJobs } = useLocalData<ScheduleJob>('schedule_jobs')
+  const externalCalendarEvents = useExternalCalendarEvents()
 
   const [currentYear, setCurrentYear] = useState(() => new Date().getFullYear())
   const [currentMonth, setCurrentMonth] = useState(() => new Date().getMonth())
@@ -191,10 +219,22 @@ export default function CalendarPage() {
       }
     }
 
-    // Future: external calendar events (Phase 9)
+    // External calendar events (ICS feed)
+    for (const ext of externalCalendarEvents) {
+      if (ext.start) {
+        events.push({
+          id: `ext-${ext.id}`,
+          title: ext.title,
+          date: ext.start.slice(0, 10),
+          type: 'external',
+          source: 'External Calendar',
+          meta: ext.location || undefined,
+        })
+      }
+    }
 
     return events
-  }, [issues, scheduleJobs])
+  }, [issues, scheduleJobs, externalCalendarEvents])
 
   // Map events by date
   const eventsByDate = useMemo(() => {
@@ -290,6 +330,7 @@ export default function CalendarPage() {
   // Event counts for metrics
   const taskEvents = allEvents.filter((e) => e.type === 'task').length
   const scheduleEvents = allEvents.filter((e) => e.type === 'schedule').length
+  const externalEventCount = allEvents.filter((e) => e.type === 'external').length
 
   return (
     <div className="flex flex-col h-full">
@@ -348,6 +389,10 @@ export default function CalendarPage() {
               <div className="flex items-center gap-1.5">
                 <div className="w-2 h-2 rounded-full bg-amber-500" />
                 <span className="text-[10px] text-zinc-500">Milestones</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <div className="w-2 h-2 rounded-full bg-zinc-400" />
+                <span className="text-[10px] text-zinc-500">External</span>
               </div>
             </div>
           </div>
@@ -416,14 +461,18 @@ export default function CalendarPage() {
           </SectionCard>
 
           {/* Summary counts */}
-          <div className="mt-4 grid grid-cols-2 gap-3">
+          <div className="mt-4 grid grid-cols-3 gap-3">
             <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3">
-              <p className="text-[10px] text-zinc-500 mb-0.5">Task Events</p>
+              <p className="text-[10px] text-zinc-500 mb-0.5">Tasks</p>
               <p className="text-lg font-bold text-blue-400">{taskEvents}</p>
             </div>
             <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3">
-              <p className="text-[10px] text-zinc-500 mb-0.5">Schedule Events</p>
+              <p className="text-[10px] text-zinc-500 mb-0.5">Schedules</p>
               <p className="text-lg font-bold text-violet-400">{scheduleEvents}</p>
+            </div>
+            <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3">
+              <p className="text-[10px] text-zinc-500 mb-0.5">External</p>
+              <p className="text-lg font-bold text-zinc-400">{externalEventCount}</p>
             </div>
           </div>
         </div>

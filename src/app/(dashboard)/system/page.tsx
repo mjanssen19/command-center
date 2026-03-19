@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   CheckCircle2,
   XCircle,
@@ -86,6 +86,31 @@ function StatusIndicator({
   )
 }
 
+// ── Integration Status Hook ──
+
+interface IntegrationStatus {
+  mem0: { configured: boolean }
+  supermemory: { configured: boolean }
+  calendar: { configured: boolean }
+}
+
+function useIntegrationStatus() {
+  const [status, setStatus] = useState<IntegrationStatus | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/integrations?type=status')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: IntegrationStatus | null) => {
+        if (!cancelled && data) setStatus(data)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
+  return status
+}
+
 // ── Integration Row ──
 
 function IntegrationRow({
@@ -93,11 +118,13 @@ function IntegrationRow({
   name,
   description,
   configured,
+  envVar,
 }: {
   icon: React.ComponentType<{ className?: string }>
   name: string
   description: string
   configured: boolean
+  envVar: string
 }) {
   return (
     <div className="flex items-center gap-3 py-2">
@@ -111,7 +138,11 @@ function IntegrationRow({
       </div>
       <div className="flex-1 min-w-0">
         <p className="text-xs font-medium text-zinc-300">{name}</p>
-        <p className="text-[10px] text-zinc-600">{description}</p>
+        <p className="text-[10px] text-zinc-600">
+          {configured ? description : (
+            <>Set <code className="text-zinc-500 bg-zinc-800 px-1 rounded">{envVar}</code> to enable</>
+          )}
+        </p>
       </div>
       <span
         className={cn(
@@ -130,6 +161,7 @@ function IntegrationRow({
 export default function SystemPage() {
   const { status: paperclipStatus } = usePaperclip()
   const { data: indexStatus, refetch: refetchIndex } = useIndexStatus()
+  const integrationStatus = useIntegrationStatus()
   const { data: docs } = useLocalData<Document>('documents')
   const { data: memories } = useLocalData<Memory>('memories')
   const [isRescanning, setIsRescanning] = useState(false)
@@ -221,19 +253,22 @@ export default function SystemPage() {
               icon={Brain}
               name="Mem0"
               description="Long-term memory provider"
-              configured={false}
+              configured={integrationStatus?.mem0?.configured ?? false}
+              envVar="MEM0_API_KEY"
             />
             <IntegrationRow
               icon={Globe}
               name="Supermemory"
               description="Web content memory"
-              configured={false}
+              configured={integrationStatus?.supermemory?.configured ?? false}
+              envVar="SUPERMEMORY_API_KEY"
             />
             <IntegrationRow
               icon={Calendar}
               name="External Calendar"
               description="Calendar sync (Google/Apple)"
-              configured={false}
+              configured={integrationStatus?.calendar?.configured ?? false}
+              envVar="CALENDAR_ICS_URL"
             />
           </div>
         </SectionCard>
