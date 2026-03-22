@@ -10,6 +10,10 @@ const ALLOWED_ENTITIES = [
   'schedule_jobs',
   'activity_events',
   'entity_links',
+  'issues',
+  'agents',
+  'projects',
+  'approvals',
 ]
 
 export async function GET(

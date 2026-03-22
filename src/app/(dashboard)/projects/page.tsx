@@ -7,17 +7,39 @@ import {
   CheckSquare,
   FileText,
   Clock,
+  Plus,
+  Loader2,
 } from 'lucide-react'
 import { PageHeader } from '@/components/common/PageHeader'
 import { EmptyState } from '@/components/common/EmptyState'
 import { PaperclipOfflineBanner } from '@/components/common/PaperclipOfflineBanner'
+import { SourceBadge } from '@/components/common/SourceBadge'
 import { usePaperclip } from '@/lib/paperclip'
 import { useProjects, useIssues } from '@/lib/paperclip/hooks'
+import { useLocalData } from '@/lib/hooks/useLocalData'
+import { useLocalCreate } from '@/lib/hooks/useLocalMutations'
+import { useMergedList } from '@/lib/hooks/useMergedData'
 import { cn } from '@/lib/utils/cn'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import type { PaperclipProject, PaperclipIssue } from '@/lib/paperclip/types'
+import type { DataSource } from '@/lib/entities/types'
 
 const PROJECT_STATUS_CONFIG: Record<string, { color: string; label: string }> = {
   active: { color: 'bg-green-500/10 text-green-400 border-green-500/20', label: 'Active' },
@@ -32,6 +54,47 @@ const PRIORITY_COLORS: Record<string, string> = {
   high: 'bg-orange-500',
   medium: 'bg-amber-500',
   low: 'bg-zinc-500',
+}
+
+// ── Normalized display type ──
+
+interface NormalizedProject {
+  id: string
+  name: string
+  description?: string
+  status: string
+  createdAt: string
+  source: DataSource
+  readonly: boolean
+}
+
+function normalizeProject(
+  data: Record<string, unknown>,
+  source: DataSource,
+  readonly: boolean
+): NormalizedProject {
+  if (source === 'paperclip') {
+    const p = data as unknown as PaperclipProject
+    return {
+      id: p.id,
+      name: p.name,
+      description: p.description,
+      status: p.status,
+      createdAt: p.createdAt,
+      source,
+      readonly,
+    }
+  }
+  // Local SQLite — snake_case
+  return {
+    id: String(data.id ?? ''),
+    name: String(data.name ?? ''),
+    description: data.description ? String(data.description) : undefined,
+    status: String(data.status ?? 'active'),
+    createdAt: String(data.created_at ?? new Date().toISOString()),
+    source,
+    readonly,
+  }
 }
 
 function relativeTime(dateStr: string): string {
@@ -50,7 +113,7 @@ function ProjectCard({
   doneCount,
   onClick,
 }: {
-  project: PaperclipProject
+  project: NormalizedProject
   taskCount: number
   doneCount: number
   onClick: () => void
@@ -65,12 +128,15 @@ function ProjectCard({
     >
       <div className="flex items-start justify-between mb-2">
         <h3 className="text-sm font-medium text-zinc-200 truncate pr-2">{project.name}</h3>
-        <Badge
-          variant="outline"
-          className={cn('text-[10px] px-1.5 py-0 h-4 border shrink-0', statusCfg.color)}
-        >
-          {statusCfg.label}
-        </Badge>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <SourceBadge source={project.source} />
+          <Badge
+            variant="outline"
+            className={cn('text-[10px] px-1.5 py-0 h-4 border', statusCfg.color)}
+          >
+            {statusCfg.label}
+          </Badge>
+        </div>
       </div>
 
       {project.description && (
@@ -109,17 +175,51 @@ function ProjectCard({
 
 function ProjectDetail({
   project,
-  issues,
+  paperclipIssues,
+  localIssues,
   onBack,
 }: {
-  project: PaperclipProject
-  issues: PaperclipIssue[]
+  project: NormalizedProject
+  paperclipIssues: PaperclipIssue[]
+  localIssues: Record<string, unknown>[]
   onBack: () => void
 }) {
   const statusCfg = PROJECT_STATUS_CONFIG[project.status] ?? PROJECT_STATUS_CONFIG.active
-  const projectIssues = issues.filter((i) => i.projectId === project.id)
+
+  // For Paperclip projects, show Paperclip issues; for local projects, show local issues
+  const projectIssues = useMemo(() => {
+    if (project.source === 'paperclip') {
+      return paperclipIssues
+        .filter((i) => i.projectId === project.id)
+        .map((i) => ({
+          id: i.id,
+          title: i.title,
+          description: i.description,
+          status: i.status,
+          priority: i.priority,
+          updatedAt: i.updatedAt,
+          source: 'paperclip' as DataSource,
+        }))
+    }
+    // Local project: show local issues linked by project_id
+    return localIssues
+      .filter((i) => String(i.project_id ?? '') === project.id)
+      .map((i) => ({
+        id: String(i.id ?? ''),
+        title: String(i.title ?? ''),
+        description: i.description ? String(i.description) : undefined,
+        status: String(i.status ?? 'backlog'),
+        priority: i.priority ? String(i.priority) : undefined,
+        updatedAt: String(i.updated_at ?? new Date().toISOString()),
+        source: 'local' as DataSource,
+      }))
+  }, [project, paperclipIssues, localIssues])
+
   const doneCount = projectIssues.filter(
-    (i) => i.status.toLowerCase() === 'done' || i.status.toLowerCase() === 'completed'
+    (i) => {
+      const s = i.status.toLowerCase()
+      return s === 'done' || s === 'completed' || s === 'closed'
+    }
   ).length
   const progress =
     projectIssues.length > 0 ? Math.round((doneCount / projectIssues.length) * 100) : 0
@@ -140,12 +240,15 @@ function ProjectDetail({
       <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-5 mb-4">
         <div className="flex items-start justify-between mb-2">
           <h2 className="text-lg font-semibold text-zinc-100">{project.name}</h2>
-          <Badge
-            variant="outline"
-            className={cn('text-xs px-2 py-0.5 border', statusCfg.color)}
-          >
-            {statusCfg.label}
-          </Badge>
+          <div className="flex items-center gap-1.5">
+            <SourceBadge source={project.source} />
+            <Badge
+              variant="outline"
+              className={cn('text-xs px-2 py-0.5 border', statusCfg.color)}
+            >
+              {statusCfg.label}
+            </Badge>
+          </div>
         </div>
         {project.description && (
           <p className="text-sm text-zinc-400 mb-4">{project.description}</p>
@@ -238,7 +341,7 @@ function ProjectDetail({
                 const priorityColor = PRIORITY_COLORS[issue.priority ?? ''] ?? 'bg-zinc-600'
                 return (
                   <div
-                    key={issue.id}
+                    key={`${issue.source}-${issue.id}`}
                     className="px-4 py-3 flex items-center gap-3 hover:bg-zinc-800/30 transition-colors"
                   >
                     <div className={cn('w-1.5 h-1.5 rounded-full shrink-0', priorityColor)} />
@@ -248,6 +351,7 @@ function ProjectDetail({
                         <p className="text-[10px] text-zinc-600 truncate">{issue.description}</p>
                       )}
                     </div>
+                    <SourceBadge source={issue.source} />
                     <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4">
                       {issue.status}
                     </Badge>
@@ -275,19 +379,135 @@ function ProjectDetail({
   )
 }
 
+// ── New Project Dialog ──
+
+function NewProjectDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  const [name, setName] = useState('')
+  const [description, setDescription] = useState('')
+  const [status, setStatus] = useState('active')
+  const createProject = useLocalCreate<Record<string, unknown>>('projects')
+
+  const handleSubmit = () => {
+    if (!name.trim()) return
+    createProject.mutate(
+      {
+        name: name.trim(),
+        description: description.trim() || '',
+        status,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      {
+        onSuccess: () => {
+          setName('')
+          setDescription('')
+          setStatus('active')
+          onOpenChange(false)
+        },
+      }
+    )
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="bg-zinc-900 border-zinc-800 max-w-md">
+        <DialogHeader>
+          <DialogTitle className="text-zinc-100">New Project</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-zinc-400 mb-1 block">Name</label>
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Project name..."
+              className="bg-zinc-800 border-zinc-700 text-zinc-200"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-zinc-400 mb-1 block">Description</label>
+            <Input
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Optional description..."
+              className="bg-zinc-800 border-zinc-700 text-zinc-200"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-zinc-400 mb-1 block">Status</label>
+            <Select value={status} onValueChange={(v) => v && setStatus(v)}>
+              <SelectTrigger className="bg-zinc-800 border-zinc-700 text-zinc-200">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="bg-zinc-800 border-zinc-700">
+                <SelectItem value="active">Active</SelectItem>
+                <SelectItem value="planning">Planning</SelectItem>
+                <SelectItem value="paused">Paused</SelectItem>
+                <SelectItem value="completed">Completed</SelectItem>
+                <SelectItem value="archived">Archived</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)} className="text-zinc-400">
+            Cancel
+          </Button>
+          <Button
+            onClick={handleSubmit}
+            disabled={!name.trim() || createProject.isPending}
+            className="bg-indigo-600 hover:bg-indigo-500 text-white"
+          >
+            {createProject.isPending ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />
+            ) : (
+              <Plus className="w-3.5 h-3.5 mr-1" />
+            )}
+            Create
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 export default function ProjectsPage() {
   const { companyId, status: paperclipStatus } = usePaperclip()
-  const { data: projects } = useProjects(companyId)
-  const { data: issues } = useIssues(companyId)
+  const { data: paperclipProjects } = useProjects(companyId)
+  const { data: paperclipIssues } = useIssues(companyId)
+  const { data: localProjects } = useLocalData<Record<string, unknown>>('projects')
+  const { data: localIssues } = useLocalData<Record<string, unknown>>('issues')
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
+  const [selectedSource, setSelectedSource] = useState<DataSource | null>(null)
+  const [dialogOpen, setDialogOpen] = useState(false)
 
-  const isOffline = paperclipStatus === 'disconnected'
-  const hasNoData = !projects || projects.length === 0
+  const paperclipConnected = paperclipStatus === 'connected'
 
+  // Merge local + Paperclip projects
+  const merged = useMergedList(localProjects, paperclipProjects, paperclipConnected)
+
+  // Normalize
+  const allProjects = useMemo(() => {
+    return merged.items.map((item) =>
+      normalizeProject(item.data as Record<string, unknown>, item.source, item.readonly)
+    )
+  }, [merged.items])
+
+  const hasNoData = allProjects.length === 0
+
+  // Task counts from both sources
   const taskCounts = useMemo(() => {
     const counts: Record<string, { total: number; done: number }> = {}
-    if (issues) {
-      for (const issue of issues) {
+
+    // Paperclip issues
+    if (paperclipIssues) {
+      for (const issue of paperclipIssues) {
         if (issue.projectId) {
           if (!counts[issue.projectId]) counts[issue.projectId] = { total: 0, done: 0 }
           counts[issue.projectId].total++
@@ -298,18 +518,41 @@ export default function ProjectsPage() {
         }
       }
     }
-    return counts
-  }, [issues])
 
-  const selectedProject = projects?.find((p) => p.id === selectedProjectId)
+    // Local issues
+    if (localIssues) {
+      for (const issue of localIssues) {
+        const projectId = issue.project_id ? String(issue.project_id) : null
+        if (projectId) {
+          if (!counts[projectId]) counts[projectId] = { total: 0, done: 0 }
+          counts[projectId].total++
+          const s = String(issue.status ?? '').toLowerCase()
+          if (s === 'done' || s === 'completed' || s === 'closed') {
+            counts[projectId].done++
+          }
+        }
+      }
+    }
+
+    return counts
+  }, [paperclipIssues, localIssues])
+
+  const selectedProject = useMemo(() => {
+    if (!selectedProjectId || !selectedSource) return null
+    return allProjects.find((p) => p.id === selectedProjectId && p.source === selectedSource) ?? null
+  }, [allProjects, selectedProjectId, selectedSource])
 
   if (selectedProject) {
     return (
       <div>
         <ProjectDetail
           project={selectedProject}
-          issues={issues ?? []}
-          onBack={() => setSelectedProjectId(null)}
+          paperclipIssues={paperclipIssues ?? []}
+          localIssues={localIssues ?? []}
+          onBack={() => {
+            setSelectedProjectId(null)
+            setSelectedSource(null)
+          }}
         />
       </div>
     )
@@ -320,42 +563,57 @@ export default function ProjectsPage() {
       <PageHeader
         title="Projects"
         description="Manage active projects, track progress, and review blockers, milestones, and linked work."
+        actions={
+          <Button
+            onClick={() => setDialogOpen(true)}
+            className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs h-8"
+          >
+            <Plus className="w-3.5 h-3.5 mr-1" />
+            New Project
+          </Button>
+        }
       />
 
       <PaperclipOfflineBanner />
 
-      {isOffline && hasNoData ? (
+      {hasNoData ? (
         <div className="bg-zinc-900 border border-zinc-800 rounded-lg">
           <EmptyState
             icon={FolderKanban}
-            title="Paperclip is offline"
-            description="Projects are managed through Paperclip. Connect to Paperclip to view your projects."
-          />
-        </div>
-      ) : hasNoData ? (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-lg">
-          <EmptyState
-            icon={FolderKanban}
-            title="No projects found"
-            description="Projects from Paperclip will appear here. Each project shows status, progress, and linked tasks."
+            title="No projects yet"
+            description="Create your first project to get started. Projects from Paperclip will also appear here when connected."
+            action={
+              <Button
+                onClick={() => setDialogOpen(true)}
+                className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs"
+              >
+                <Plus className="w-3.5 h-3.5 mr-1" />
+                New Project
+              </Button>
+            }
           />
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-          {projects.map((project) => {
+          {allProjects.map((project) => {
             const counts = taskCounts[project.id] ?? { total: 0, done: 0 }
             return (
               <ProjectCard
-                key={project.id}
+                key={`${project.source}-${project.id}`}
                 project={project}
                 taskCount={counts.total}
                 doneCount={counts.done}
-                onClick={() => setSelectedProjectId(project.id)}
+                onClick={() => {
+                  setSelectedProjectId(project.id)
+                  setSelectedSource(project.source)
+                }}
               />
             )
           })}
         </div>
       )}
+
+      <NewProjectDialog open={dialogOpen} onOpenChange={setDialogOpen} />
     </div>
   )
 }

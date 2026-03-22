@@ -117,6 +117,68 @@ export interface EntityLink {
   confidence: number
 }
 
+// Local core entities (stored in SQLite, editable)
+
+export interface LocalIssue {
+  id: string
+  title: string
+  description: string
+  status: 'backlog' | 'in_progress' | 'review' | 'done'
+  priority: 'low' | 'medium' | 'high' | 'urgent'
+  projectId?: string
+  assigneeAgentId?: string
+  dueDate?: string
+  labels: string[]
+  createdAt: string
+  updatedAt: string
+}
+
+export interface LocalAgent {
+  id: string
+  name: string
+  role: string
+  model: string
+  provider: string
+  status: 'active' | 'idle' | 'error' | 'offline'
+  adapterType: string
+  source: 'local' | 'scanner'
+  configPath?: string
+  lastHeartbeatAt?: string
+  createdAt: string
+}
+
+export interface LocalProject {
+  id: string
+  name: string
+  description: string
+  status: 'active' | 'planning' | 'paused' | 'completed' | 'archived'
+  ownerId?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface LocalApproval {
+  id: string
+  type: string
+  status: 'pending' | 'approved' | 'rejected'
+  requestorAgentId?: string
+  title: string
+  description: string
+  payload: Record<string, unknown>
+  createdAt: string
+  resolvedAt?: string
+}
+
+// Dual-source merge types
+
+export type DataSource = 'local' | 'paperclip'
+
+export interface MergedItem<T> {
+  data: T
+  source: DataSource
+  readonly: boolean
+}
+
 // Search result from FTS5
 export interface SearchResult {
   entityType: EntityType

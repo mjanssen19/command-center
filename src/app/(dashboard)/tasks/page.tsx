@@ -24,16 +24,20 @@ import { PageHeader } from '@/components/common/PageHeader'
 import { MetricCard } from '@/components/cards/MetricCard'
 import { EmptyState } from '@/components/common/EmptyState'
 import { PaperclipOfflineBanner } from '@/components/common/PaperclipOfflineBanner'
+import { SourceBadge } from '@/components/common/SourceBadge'
 import { usePaperclip } from '@/lib/paperclip'
 import {
   useIssues,
   useActivity,
-  useCreateIssue,
   useUpdateIssue,
   useAgents,
   useAgentRuns,
   useIssueComments,
 } from '@/lib/paperclip/hooks'
+import { useLocalData } from '@/lib/hooks/useLocalData'
+import { useLocalCreate } from '@/lib/hooks/useLocalMutations'
+import { useLocalUpdate } from '@/lib/hooks/useLocalMutations'
+import { useMergedList } from '@/lib/hooks/useMergedData'
 import { cn } from '@/lib/utils/cn'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -53,6 +57,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import type { PaperclipIssue, PaperclipActivity, PaperclipRun } from '@/lib/paperclip/types'
+import type { DataSource } from '@/lib/entities/types'
 
 // ── Constants ──
 
@@ -77,6 +82,23 @@ const STATUS_BADGE_COLORS: Record<string, string> = {
   done: 'bg-green-900/50 text-green-300',
 }
 
+// ── Normalized display type ──
+
+interface NormalizedTask {
+  id: string
+  title: string
+  description?: string
+  status: string
+  priority?: string
+  projectId?: string
+  assigneeId?: string
+  labels?: string[]
+  createdAt: string
+  updatedAt: string
+  source: DataSource
+  readonly: boolean
+}
+
 // ── Helpers ──
 
 function mapStatusToColumn(status: string): string {
@@ -99,6 +121,46 @@ function relativeTime(dateStr: string): string {
 
 function columnLabel(key: string): string {
   return KANBAN_COLUMNS.find((c) => c.key === key)?.label ?? key
+}
+
+/** Normalize a merged item into a common display shape */
+function normalizeTask(
+  data: Record<string, unknown>,
+  source: DataSource,
+  readonly: boolean
+): NormalizedTask {
+  if (source === 'paperclip') {
+    const p = data as unknown as PaperclipIssue
+    return {
+      id: p.id,
+      title: p.title,
+      description: p.description,
+      status: p.status,
+      priority: p.priority,
+      projectId: p.projectId,
+      assigneeId: p.assigneeId,
+      labels: p.labels,
+      createdAt: p.createdAt,
+      updatedAt: p.updatedAt,
+      source,
+      readonly,
+    }
+  }
+  // Local SQLite — snake_case fields
+  return {
+    id: String(data.id ?? ''),
+    title: String(data.title ?? ''),
+    description: data.description ? String(data.description) : undefined,
+    status: String(data.status ?? 'backlog'),
+    priority: data.priority ? String(data.priority) : undefined,
+    projectId: data.project_id ? String(data.project_id) : undefined,
+    assigneeId: data.assignee_agent_id ? String(data.assignee_agent_id) : undefined,
+    labels: Array.isArray(data.labels) ? (data.labels as string[]) : [],
+    createdAt: String(data.created_at ?? new Date().toISOString()),
+    updatedAt: String(data.updated_at ?? new Date().toISOString()),
+    source,
+    readonly,
+  }
 }
 
 /** Log a local activity event to SQLite */
@@ -158,34 +220,36 @@ function StateFlowIndicator() {
 // ── Enhanced Task Card ──
 
 function TaskCard({
-  issue,
+  task,
   agents,
   activities,
   runs,
   onClick,
 }: {
-  issue: PaperclipIssue
+  task: NormalizedTask
   agents: Record<string, string>
   activities: PaperclipActivity[]
   runs: PaperclipRun[]
   onClick: () => void
 }) {
-  const priorityColor = PRIORITY_COLORS[issue.priority ?? ''] ?? 'bg-zinc-600'
-  const agentName = issue.assigneeId ? agents[issue.assigneeId] : undefined
+  const priorityColor = PRIORITY_COLORS[task.priority ?? ''] ?? 'bg-zinc-600'
+  const agentName = task.assigneeId ? agents[task.assigneeId] : undefined
 
   // Check if agent is currently running on this task
   const isAgentRunning = runs.some(
-    (r) => r.status === 'running' && r.agentId === issue.assigneeId
+    (r) => r.status === 'running' && r.agentId === task.assigneeId
   )
 
-  // Last agent action from activity feed
-  const lastActivity = activities
-    .filter((a) => a.issueId === issue.id)
-    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0]
+  // Last agent action from activity feed (Paperclip only)
+  const lastActivity = task.source === 'paperclip'
+    ? activities
+        .filter((a) => a.issueId === task.id)
+        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0]
+    : undefined
 
   // Run count for this task
-  const taskRuns = issue.assigneeId
-    ? runs.filter((r) => r.agentId === issue.assigneeId).length
+  const taskRuns = task.assigneeId
+    ? runs.filter((r) => r.agentId === task.assigneeId).length
     : 0
 
   return (
@@ -204,12 +268,12 @@ function TaskCard({
           )}
         </div>
         <p className="text-sm font-medium text-zinc-200 leading-snug line-clamp-2 group-hover:text-zinc-100">
-          {issue.title}
+          {task.title}
         </p>
         <ChevronRight className="w-3.5 h-3.5 text-zinc-700 shrink-0 mt-0.5 ml-auto opacity-0 group-hover:opacity-100 transition-opacity" />
       </div>
-      {issue.description && (
-        <p className="text-xs text-zinc-500 line-clamp-2 mb-2 ml-3.5">{issue.description}</p>
+      {task.description && (
+        <p className="text-xs text-zinc-500 line-clamp-2 mb-2 ml-3.5">{task.description}</p>
       )}
 
       {/* Agent action / run info */}
@@ -220,9 +284,10 @@ function TaskCard({
       )}
 
       <div className="flex items-center gap-2 ml-3.5 flex-wrap">
-        {issue.projectId && (
+        <SourceBadge source={task.source} />
+        {task.projectId && (
           <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-4">
-            {issue.projectId.slice(0, 8)}
+            {task.projectId.slice(0, 8)}
           </Badge>
         )}
         {agentName && (
@@ -241,7 +306,7 @@ function TaskCard({
             {taskRuns} run{taskRuns !== 1 ? 's' : ''}
           </span>
         )}
-        <span className="text-[10px] text-zinc-600 ml-auto">{relativeTime(issue.updatedAt)}</span>
+        <span className="text-[10px] text-zinc-600 ml-auto">{relativeTime(task.updatedAt)}</span>
       </div>
     </div>
   )
@@ -252,7 +317,7 @@ function TaskCard({
 function KanbanColumn({
   label,
   color,
-  issues,
+  tasks,
   agents,
   activities,
   runs,
@@ -262,15 +327,57 @@ function KanbanColumn({
 }: {
   label: string
   color: string
-  issues: PaperclipIssue[]
+  tasks: NormalizedTask[]
   agents: Record<string, string>
   activities: PaperclipActivity[]
   runs: PaperclipRun[]
-  onTaskClick: (issue: PaperclipIssue) => void
+  onTaskClick: (task: NormalizedTask) => void
   companyId: string | undefined
   isReviewColumn: boolean
 }) {
-  const updateIssue = useUpdateIssue(companyId)
+  const updatePaperclipIssue = useUpdateIssue(companyId)
+  const updateLocalIssue = useLocalUpdate('issues')
+
+  const handleReviewAction = (task: NormalizedTask, newStatus: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (task.source === 'local') {
+      updateLocalIssue.mutate(
+        { id: task.id, status: newStatus, updated_at: new Date().toISOString() },
+        {
+          onSuccess: () => {
+            logLocalActivity({
+              type: newStatus === 'done' ? 'task_approved' : 'task_status_changed',
+              entityType: 'issue',
+              entityId: task.id,
+              summary:
+                newStatus === 'done'
+                  ? `User approved task '${task.title}'`
+                  : `User requested changes on task '${task.title}'`,
+            })
+          },
+        }
+      )
+    } else {
+      updatePaperclipIssue.mutate(
+        { issueId: task.id, status: newStatus },
+        {
+          onSuccess: () => {
+            logLocalActivity({
+              type: newStatus === 'done' ? 'task_approved' : 'task_status_changed',
+              entityType: 'issue',
+              entityId: task.id,
+              summary:
+                newStatus === 'done'
+                  ? `User approved task '${task.title}'`
+                  : `User requested changes on task '${task.title}'`,
+            })
+          },
+        }
+      )
+    }
+  }
+
+  const isUpdating = updatePaperclipIssue.isPending || updateLocalIssue.isPending
 
   return (
     <div className="flex flex-col min-w-[280px] flex-1">
@@ -280,23 +387,23 @@ function KanbanColumn({
           {label}
         </span>
         <span className="text-[10px] text-zinc-600 bg-zinc-800 rounded-full px-1.5 py-0.5 font-medium">
-          {issues.length}
+          {tasks.length}
         </span>
       </div>
       <div className="flex flex-col gap-2 flex-1 min-h-[200px]">
-        {issues.length === 0 ? (
+        {tasks.length === 0 ? (
           <div className="flex-1 rounded-lg border border-dashed border-zinc-800 flex items-center justify-center">
             <p className="text-xs text-zinc-600">No tasks</p>
           </div>
         ) : (
-          issues.map((issue) => (
-            <div key={issue.id}>
+          tasks.map((task) => (
+            <div key={`${task.source}-${task.id}`}>
               <TaskCard
-                issue={issue}
+                task={task}
                 agents={agents}
                 activities={activities}
                 runs={runs}
-                onClick={() => onTaskClick(issue)}
+                onClick={() => onTaskClick(task)}
               />
               {/* Review gate inline buttons */}
               {isReviewColumn && (
@@ -305,23 +412,8 @@ function KanbanColumn({
                     variant="ghost"
                     size="sm"
                     className="flex-1 h-6 text-[10px] text-green-400 hover:text-green-300 hover:bg-green-900/20"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      updateIssue.mutate(
-                        { issueId: issue.id, status: 'done' },
-                        {
-                          onSuccess: () => {
-                            logLocalActivity({
-                              type: 'task_approved',
-                              entityType: 'issue',
-                              entityId: issue.id,
-                              summary: `User approved task '${issue.title}'`,
-                            })
-                          },
-                        }
-                      )
-                    }}
-                    disabled={updateIssue.isPending}
+                    onClick={(e) => handleReviewAction(task, 'done', e)}
+                    disabled={isUpdating}
                   >
                     <CheckCircle2 className="w-3 h-3 mr-0.5" />
                     Approve
@@ -330,23 +422,8 @@ function KanbanColumn({
                     variant="ghost"
                     size="sm"
                     className="flex-1 h-6 text-[10px] text-amber-400 hover:text-amber-300 hover:bg-amber-900/20"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      updateIssue.mutate(
-                        { issueId: issue.id, status: 'in_progress' },
-                        {
-                          onSuccess: () => {
-                            logLocalActivity({
-                              type: 'task_status_changed',
-                              entityType: 'issue',
-                              entityId: issue.id,
-                              summary: `User requested changes on task '${issue.title}'`,
-                            })
-                          },
-                        }
-                      )
-                    }}
-                    disabled={updateIssue.isPending}
+                    onClick={(e) => handleReviewAction(task, 'in_progress', e)}
+                    disabled={isUpdating}
                   >
                     <RotateCcw className="w-3 h-3 mr-0.5" />
                     Request Changes
@@ -400,28 +477,31 @@ function ActivitySidebar({ activities }: { activities: PaperclipActivity[] }) {
 // ── Task Detail Panel ──
 
 function TaskDetailPanel({
-  issue,
+  task,
   agents,
   activities,
   comments,
   companyId,
   onClose,
 }: {
-  issue: PaperclipIssue
+  task: NormalizedTask
   agents: Record<string, string>
   activities: PaperclipActivity[]
   comments: unknown[] | undefined
   companyId: string | undefined
   onClose: () => void
 }) {
-  const updateIssue = useUpdateIssue(companyId)
-  const col = mapStatusToColumn(issue.status)
-  const agentName = issue.assigneeId ? agents[issue.assigneeId] : undefined
+  const updatePaperclipIssue = useUpdateIssue(companyId)
+  const updateLocalIssue = useLocalUpdate('issues')
+  const col = mapStatusToColumn(task.status)
+  const agentName = task.assigneeId ? agents[task.assigneeId] : undefined
 
-  // Filter activities for this issue
-  const issueActivities = activities
-    .filter((a) => a.issueId === issue.id)
-    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+  // Filter activities for this issue (Paperclip only)
+  const issueActivities = task.source === 'paperclip'
+    ? activities
+        .filter((a) => a.issueId === task.id)
+        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+    : []
 
   // Merge comments into timeline
   const commentEvents: Array<{ id: string; type: string; summary: string; timestamp: string }> =
@@ -448,22 +528,40 @@ function TaskDetailPanel({
   ].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
 
   const handleStatusChange = (newStatus: string) => {
-    if (!companyId) return
     const oldCol = col
-    updateIssue.mutate(
-      { issueId: issue.id, status: newStatus },
-      {
-        onSuccess: () => {
-          logLocalActivity({
-            type: 'task_status_changed',
-            entityType: 'issue',
-            entityId: issue.id,
-            summary: `User moved task '${issue.title}' from ${columnLabel(oldCol)} to ${columnLabel(mapStatusToColumn(newStatus))}`,
-          })
-        },
-      }
-    )
+    if (task.source === 'local') {
+      updateLocalIssue.mutate(
+        { id: task.id, status: newStatus, updated_at: new Date().toISOString() },
+        {
+          onSuccess: () => {
+            logLocalActivity({
+              type: 'task_status_changed',
+              entityType: 'issue',
+              entityId: task.id,
+              summary: `User moved task '${task.title}' from ${columnLabel(oldCol)} to ${columnLabel(mapStatusToColumn(newStatus))}`,
+            })
+          },
+        }
+      )
+    } else {
+      if (!companyId) return
+      updatePaperclipIssue.mutate(
+        { issueId: task.id, status: newStatus },
+        {
+          onSuccess: () => {
+            logLocalActivity({
+              type: 'task_status_changed',
+              entityType: 'issue',
+              entityId: task.id,
+              summary: `User moved task '${task.title}' from ${columnLabel(oldCol)} to ${columnLabel(mapStatusToColumn(newStatus))}`,
+            })
+          },
+        }
+      )
+    }
   }
+
+  const isUpdating = updatePaperclipIssue.isPending || updateLocalIssue.isPending
 
   const eventIcon = (type: string) => {
     if (type === 'comment') return <MessageSquare className="w-3 h-3 text-zinc-500" />
@@ -482,8 +580,9 @@ function TaskDetailPanel({
       {/* Header */}
       <div className="flex items-start justify-between p-4 border-b border-zinc-800">
         <div className="flex-1 min-w-0 mr-2">
-          <h3 className="text-sm font-semibold text-zinc-100 leading-snug">{issue.title}</h3>
+          <h3 className="text-sm font-semibold text-zinc-100 leading-snug">{task.title}</h3>
           <div className="flex items-center gap-2 mt-2 flex-wrap">
+            <SourceBadge source={task.source} />
             <span
               className={cn(
                 'text-[10px] font-medium px-1.5 py-0.5 rounded',
@@ -492,10 +591,10 @@ function TaskDetailPanel({
             >
               {columnLabel(col)}
             </span>
-            {issue.priority && (
+            {task.priority && (
               <span className="flex items-center gap-1 text-[10px] text-zinc-500">
-                <span className={cn('w-1.5 h-1.5 rounded-full', PRIORITY_COLORS[issue.priority])} />
-                {issue.priority}
+                <span className={cn('w-1.5 h-1.5 rounded-full', PRIORITY_COLORS[task.priority])} />
+                {task.priority}
               </span>
             )}
             {agentName && (
@@ -512,12 +611,12 @@ function TaskDetailPanel({
       </div>
 
       {/* Description */}
-      {issue.description && (
+      {task.description && (
         <div className="px-4 py-3 border-b border-zinc-800">
           <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-1">
             Description
           </p>
-          <p className="text-xs text-zinc-400 leading-relaxed">{issue.description}</p>
+          <p className="text-xs text-zinc-400 leading-relaxed">{task.description}</p>
         </div>
       )}
 
@@ -532,7 +631,7 @@ function TaskDetailPanel({
               key={c.key}
               variant="ghost"
               size="sm"
-              disabled={col === c.key || updateIssue.isPending}
+              disabled={col === c.key || isUpdating}
               className={cn(
                 'h-6 text-[10px] px-2',
                 col === c.key
@@ -553,7 +652,7 @@ function TaskDetailPanel({
               size="sm"
               className="flex-1 h-7 text-xs bg-green-700 hover:bg-green-600 text-white"
               onClick={() => handleStatusChange('done')}
-              disabled={updateIssue.isPending}
+              disabled={isUpdating}
             >
               <CheckCircle2 className="w-3 h-3 mr-1" />
               Approve
@@ -563,7 +662,7 @@ function TaskDetailPanel({
               variant="ghost"
               className="flex-1 h-7 text-xs text-amber-400 hover:text-amber-300 hover:bg-amber-900/20"
               onClick={() => handleStatusChange('in_progress')}
-              disabled={updateIssue.isPending}
+              disabled={isUpdating}
             >
               <RotateCcw className="w-3 h-3 mr-1" />
               Request Changes
@@ -608,22 +707,28 @@ function TaskDetailPanel({
 function NewTaskDialog({
   open,
   onOpenChange,
-  companyId,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
-  companyId: string | undefined
 }) {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [status, setStatus] = useState('backlog')
   const [priority, setPriority] = useState('medium')
-  const createIssue = useCreateIssue(companyId)
+  const createLocalIssue = useLocalCreate<Record<string, unknown>>('issues')
 
   const handleSubmit = () => {
-    if (!title.trim() || !companyId) return
-    createIssue.mutate(
-      { title: title.trim(), description: description.trim() || undefined, status, priority },
+    if (!title.trim()) return
+    createLocalIssue.mutate(
+      {
+        title: title.trim(),
+        description: description.trim() || '',
+        status,
+        priority,
+        labels: '[]',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
       {
         onSuccess: () => {
           logLocalActivity({
@@ -704,10 +809,10 @@ function NewTaskDialog({
           </Button>
           <Button
             onClick={handleSubmit}
-            disabled={!title.trim() || createIssue.isPending}
+            disabled={!title.trim() || createLocalIssue.isPending}
             className="bg-indigo-600 hover:bg-indigo-500 text-white"
           >
-            {createIssue.isPending ? (
+            {createLocalIssue.isPending ? (
               <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />
             ) : (
               <Plus className="w-3.5 h-3.5 mr-1" />
@@ -723,23 +828,27 @@ function NewTaskDialog({
 // ── Task Detail Wrapper (fetches comments for selected issue) ──
 
 function TaskDetailPanelWrapper({
-  issue,
+  task,
   agents,
   activities,
   companyId,
   onClose,
 }: {
-  issue: PaperclipIssue
+  task: NormalizedTask
   agents: Record<string, string>
   activities: PaperclipActivity[]
   companyId: string | undefined
   onClose: () => void
 }) {
-  const { data: comments } = useIssueComments(companyId, issue.id)
+  // Only fetch comments for Paperclip issues
+  const { data: comments } = useIssueComments(
+    task.source === 'paperclip' ? companyId : undefined,
+    task.source === 'paperclip' ? task.id : undefined
+  )
 
   return (
     <TaskDetailPanel
-      issue={issue}
+      task={task}
       agents={agents}
       activities={activities}
       comments={comments as unknown[] | undefined}
@@ -753,18 +862,30 @@ function TaskDetailPanelWrapper({
 
 export default function TasksPage() {
   const { companyId, status: paperclipStatus } = usePaperclip()
-  const { data: issues, dataUpdatedAt } = useIssues(companyId)
+  const { data: paperclipIssues, dataUpdatedAt } = useIssues(companyId)
+  const { data: localIssues } = useLocalData<Record<string, unknown>>('issues')
   const { data: activities } = useActivity(companyId)
   const { data: agents } = useAgents(companyId)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [activityOpen, setActivityOpen] = useState(true)
-  const [selectedIssue, setSelectedIssue] = useState<PaperclipIssue | null>(null)
+  const [selectedTask, setSelectedTask] = useState<NormalizedTask | null>(null)
   const [filterStatus, setFilterStatus] = useState<string>('all')
   const [filterPriority, setFilterPriority] = useState<string>('all')
 
-  // Fetch all runs (pass undefined for agentId to get all runs if API supports it)
-  // We pass a dummy agentId — runs are only used for live indicators, gracefully handles empty
-  const { data: allRuns } = useAgentRuns(companyId, selectedIssue?.assigneeId ?? undefined)
+  const paperclipConnected = paperclipStatus === 'connected'
+
+  // Merge local + Paperclip issues
+  const merged = useMergedList(localIssues, paperclipIssues, paperclipConnected)
+
+  // Normalize all merged items into the common display shape
+  const allTasks = useMemo(() => {
+    return merged.items.map((item) =>
+      normalizeTask(item.data as Record<string, unknown>, item.source, item.readonly)
+    )
+  }, [merged.items])
+
+  // Fetch runs for the selected task's agent
+  const { data: allRuns } = useAgentRuns(companyId, selectedTask?.assigneeId ?? undefined)
 
   const agentMap = useMemo(() => {
     const map: Record<string, string> = {}
@@ -776,37 +897,36 @@ export default function TasksPage() {
     return map
   }, [agents])
 
-  const filteredIssues = useMemo(() => {
-    if (!issues) return []
-    return issues.filter((issue) => {
-      if (filterStatus !== 'all' && mapStatusToColumn(issue.status) !== filterStatus) return false
-      if (filterPriority !== 'all' && issue.priority !== filterPriority) return false
+  const filteredTasks = useMemo(() => {
+    return allTasks.filter((task) => {
+      if (filterStatus !== 'all' && mapStatusToColumn(task.status) !== filterStatus) return false
+      if (filterPriority !== 'all' && task.priority !== filterPriority) return false
       return true
     })
-  }, [issues, filterStatus, filterPriority])
+  }, [allTasks, filterStatus, filterPriority])
 
-  const columnIssues = useMemo(() => {
-    const map: Record<string, PaperclipIssue[]> = {
+  const columnTasks = useMemo(() => {
+    const map: Record<string, NormalizedTask[]> = {
       backlog: [],
       in_progress: [],
       review: [],
       done: [],
     }
-    for (const issue of filteredIssues) {
-      const col = mapStatusToColumn(issue.status)
-      if (map[col]) map[col].push(issue)
+    for (const task of filteredTasks) {
+      const col = mapStatusToColumn(task.status)
+      if (map[col]) map[col].push(task)
     }
     return map
-  }, [filteredIssues])
+  }, [filteredTasks])
 
-  const handleTaskClick = useCallback((issue: PaperclipIssue) => {
-    setSelectedIssue(issue)
+  const handleTaskClick = useCallback((task: NormalizedTask) => {
+    setSelectedTask(task)
   }, [])
 
-  // Metrics
-  const totalTasks = issues?.length ?? 0
-  const inProgress = issues?.filter((i) => mapStatusToColumn(i.status) === 'in_progress').length ?? 0
-  const doneTasks = issues?.filter((i) => mapStatusToColumn(i.status) === 'done').length ?? 0
+  // Metrics from merged data
+  const totalTasks = allTasks.length
+  const inProgress = allTasks.filter((t) => mapStatusToColumn(t.status) === 'in_progress').length
+  const doneTasks = allTasks.filter((t) => mapStatusToColumn(t.status) === 'done').length
   const completionRate = totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0
 
   // Week tasks (created in last 7 days)
@@ -816,9 +936,8 @@ export default function TasksPage() {
     () => Date.now() - 7 * 86_400_000
   )
   const thisWeek = useMemo(() => {
-    if (!issues) return 0
-    return issues.filter((i) => new Date(i.createdAt).getTime() > weekCutoff).length
-  }, [issues, weekCutoff])
+    return allTasks.filter((t) => new Date(t.createdAt).getTime() > weekCutoff).length
+  }, [allTasks, weekCutoff])
 
   // Last updated timestamp
   const lastUpdatedStr = useMemo(() => {
@@ -826,14 +945,16 @@ export default function TasksPage() {
     return relativeTime(new Date(dataUpdatedAt).toISOString())
   }, [dataUpdatedAt])
 
-  // Keep selectedIssue in sync with latest data
-  const currentSelectedIssue = useMemo(() => {
-    if (!selectedIssue || !issues) return selectedIssue
-    return issues.find((i) => i.id === selectedIssue.id) ?? selectedIssue
-  }, [selectedIssue, issues])
+  // Keep selectedTask in sync with latest data
+  const currentSelectedTask = useMemo(() => {
+    if (!selectedTask) return null
+    const found = allTasks.find(
+      (t) => t.id === selectedTask.id && t.source === selectedTask.source
+    )
+    return found ?? selectedTask
+  }, [selectedTask, allTasks])
 
-  const isOffline = paperclipStatus === 'disconnected'
-  const hasNoData = !issues || issues.length === 0
+  const hasNoData = allTasks.length === 0
 
   return (
     <div className="flex flex-col h-full">
@@ -850,7 +971,6 @@ export default function TasksPage() {
             <Button
               onClick={() => setDialogOpen(true)}
               className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs h-8"
-              disabled={isOffline}
             >
               <Plus className="w-3.5 h-3.5 mr-1" />
               New Task
@@ -900,11 +1020,11 @@ export default function TasksPage() {
           </SelectContent>
         </Select>
         <div className="ml-auto flex items-center gap-1">
-          {selectedIssue && (
+          {selectedTask && (
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => setSelectedIssue(null)}
+              onClick={() => setSelectedTask(null)}
               className="text-zinc-500 hover:text-zinc-300 h-7 px-2 text-[10px]"
             >
               Close detail
@@ -926,15 +1046,7 @@ export default function TasksPage() {
       </div>
 
       {/* Main content area */}
-      {isOffline && hasNoData ? (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-lg flex-1">
-          <EmptyState
-            icon={CheckSquare}
-            title="Paperclip is offline"
-            description="Tasks are managed through Paperclip. Connect to Paperclip to view and manage your task board."
-          />
-        </div>
-      ) : hasNoData ? (
+      {hasNoData ? (
         <div className="bg-zinc-900 border border-zinc-800 rounded-lg flex-1">
           <EmptyState
             icon={CheckSquare}
@@ -960,7 +1072,7 @@ export default function TasksPage() {
                 key={col.key}
                 label={col.label}
                 color={col.color}
-                issues={columnIssues[col.key] ?? []}
+                tasks={columnTasks[col.key] ?? []}
                 agents={agentMap}
                 activities={activities ?? []}
                 runs={allRuns ?? []}
@@ -972,18 +1084,18 @@ export default function TasksPage() {
           </div>
 
           {/* Task detail panel */}
-          {currentSelectedIssue && (
+          {currentSelectedTask && (
             <TaskDetailPanelWrapper
-              issue={currentSelectedIssue}
+              task={currentSelectedTask}
               agents={agentMap}
               activities={activities ?? []}
               companyId={companyId}
-              onClose={() => setSelectedIssue(null)}
+              onClose={() => setSelectedTask(null)}
             />
           )}
 
           {/* Activity sidebar */}
-          {activityOpen && !currentSelectedIssue && (
+          {activityOpen && !currentSelectedTask && (
             <div className="w-72 shrink-0 bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
               <ActivitySidebar activities={activities ?? []} />
             </div>
@@ -994,7 +1106,6 @@ export default function TasksPage() {
       <NewTaskDialog
         open={dialogOpen}
         onOpenChange={setDialogOpen}
-        companyId={companyId}
       />
     </div>
   )

@@ -9,17 +9,38 @@ import {
   ChevronUp,
   Loader2,
   MessageSquare,
+  Plus,
 } from 'lucide-react'
 import { PageHeader } from '@/components/common/PageHeader'
 import { EmptyState } from '@/components/common/EmptyState'
 import { PaperclipOfflineBanner } from '@/components/common/PaperclipOfflineBanner'
+import { SourceBadge } from '@/components/common/SourceBadge'
 import { usePaperclip } from '@/lib/paperclip'
 import { useApprovals, useApproveApproval, useRejectApproval, useAgents } from '@/lib/paperclip/hooks'
+import { useLocalData } from '@/lib/hooks/useLocalData'
+import { useLocalCreate, useLocalUpdate } from '@/lib/hooks/useLocalMutations'
+import { useMergedList } from '@/lib/hooks/useMergedData'
 import { cn } from '@/lib/utils/cn'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import type { PaperclipApproval } from '@/lib/paperclip/types'
+import type { DataSource } from '@/lib/entities/types'
 
 const STATUS_CONFIG: Record<string, { color: string; label: string }> = {
   pending: { color: 'bg-amber-500/10 text-amber-400 border-amber-500/20', label: 'Pending' },
@@ -34,6 +55,60 @@ const TYPE_CONFIG: Record<string, { color: string }> = {
   content: { color: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' },
   email: { color: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20' },
   project_gate: { color: 'bg-amber-500/10 text-amber-400 border-amber-500/20' },
+  general: { color: 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20' },
+}
+
+// ── Normalized display type ──
+
+interface NormalizedApproval {
+  id: string
+  type: string
+  status: string
+  title?: string
+  description?: string
+  requestorAgentId?: string
+  payload?: Record<string, unknown>
+  createdAt: string
+  resolvedAt?: string
+  source: DataSource
+  readonly: boolean
+}
+
+function normalizeApproval(
+  data: Record<string, unknown>,
+  source: DataSource,
+  readonly: boolean
+): NormalizedApproval {
+  if (source === 'paperclip') {
+    const p = data as unknown as PaperclipApproval
+    return {
+      id: p.id,
+      type: p.type,
+      status: p.status,
+      requestorAgentId: p.requestedById,
+      payload: p.payload,
+      createdAt: p.createdAt,
+      resolvedAt: p.resolvedAt,
+      source,
+      readonly,
+    }
+  }
+  // Local SQLite — snake_case
+  return {
+    id: String(data.id ?? ''),
+    type: String(data.type ?? 'general'),
+    status: String(data.status ?? 'pending'),
+    title: data.title ? String(data.title) : undefined,
+    description: data.description ? String(data.description) : undefined,
+    requestorAgentId: data.requestor_agent_id ? String(data.requestor_agent_id) : undefined,
+    payload: typeof data.payload === 'object' && data.payload !== null
+      ? (data.payload as Record<string, unknown>)
+      : undefined,
+    createdAt: String(data.created_at ?? new Date().toISOString()),
+    resolvedAt: data.resolved_at ? String(data.resolved_at) : undefined,
+    source,
+    readonly,
+  }
 }
 
 function relativeTime(dateStr: string): string {
@@ -46,7 +121,12 @@ function relativeTime(dateStr: string): string {
   return `${Math.floor(diff / 86_400_000)}d ago`
 }
 
-function formatPayload(payload: Record<string, unknown> | undefined): string {
+function formatPayload(approval: NormalizedApproval): string {
+  // For local approvals with title/description
+  if (approval.title) return approval.title
+  if (approval.description) return approval.description
+
+  const payload = approval.payload
   if (!payload) return 'No details provided'
   // Try common keys for a preview
   if (payload.description && typeof payload.description === 'string') return payload.description
@@ -63,16 +143,44 @@ function ApprovalCard({
   agentName,
   companyId,
 }: {
-  approval: PaperclipApproval
+  approval: NormalizedApproval
   agentName: string | undefined
   companyId: string | undefined
 }) {
   const [expanded, setExpanded] = useState(false)
   const statusCfg = STATUS_CONFIG[approval.status] ?? STATUS_CONFIG.pending
   const typeCfg = TYPE_CONFIG[approval.type] ?? { color: 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20' }
-  const approve = useApproveApproval(companyId)
-  const reject = useRejectApproval(companyId)
+  const approvePaperclip = useApproveApproval(companyId)
+  const rejectPaperclip = useRejectApproval(companyId)
+  const updateLocal = useLocalUpdate('approvals')
   const isPending = approval.status === 'pending'
+
+  const handleApprove = () => {
+    if (approval.source === 'local') {
+      updateLocal.mutate({
+        id: approval.id,
+        status: 'approved',
+        resolved_at: new Date().toISOString(),
+      })
+    } else {
+      approvePaperclip.mutate(approval.id)
+    }
+  }
+
+  const handleReject = () => {
+    if (approval.source === 'local') {
+      updateLocal.mutate({
+        id: approval.id,
+        status: 'rejected',
+        resolved_at: new Date().toISOString(),
+      })
+    } else {
+      rejectPaperclip.mutate(approval.id)
+    }
+  }
+
+  const isActionPending =
+    approvePaperclip.isPending || rejectPaperclip.isPending || updateLocal.isPending
 
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
@@ -91,7 +199,7 @@ function ApprovalCard({
         {/* Content */}
         <div className="flex-1 min-w-0">
           <p className="text-sm text-zinc-200 truncate">
-            {formatPayload(approval.payload)}
+            {formatPayload(approval)}
           </p>
           <div className="flex items-center gap-2 mt-0.5">
             {agentName && (
@@ -103,7 +211,8 @@ function ApprovalCard({
           </div>
         </div>
 
-        {/* Status */}
+        {/* Source + Status */}
+        <SourceBadge source={approval.source} />
         <Badge
           variant="outline"
           className={cn('text-[10px] px-1.5 py-0 h-4 border shrink-0', statusCfg.color)}
@@ -120,17 +229,25 @@ function ApprovalCard({
 
       {expanded && (
         <div className="border-t border-zinc-800 px-4 py-3">
-          {/* Full payload */}
+          {/* Full details */}
           <div className="mb-3">
             <h4 className="text-[10px] text-zinc-600 uppercase tracking-wider mb-2 font-semibold">
               Request Details
             </h4>
+            {approval.title && (
+              <p className="text-xs text-zinc-300 font-medium mb-1">{approval.title}</p>
+            )}
+            {approval.description && (
+              <p className="text-xs text-zinc-400 mb-2">{approval.description}</p>
+            )}
             {approval.payload ? (
               <pre className="text-xs text-zinc-400 bg-zinc-800 rounded-md p-3 overflow-x-auto max-h-48 font-mono">
                 {JSON.stringify(approval.payload, null, 2)}
               </pre>
             ) : (
-              <p className="text-xs text-zinc-600">No payload data available.</p>
+              !approval.title && !approval.description && (
+                <p className="text-xs text-zinc-600">No payload data available.</p>
+              )
             )}
           </div>
 
@@ -150,11 +267,11 @@ function ApprovalCard({
             <div className="flex items-center gap-2 pt-2 border-t border-zinc-800">
               <Button
                 size="sm"
-                onClick={() => approve.mutate(approval.id)}
-                disabled={approve.isPending || reject.isPending}
+                onClick={handleApprove}
+                disabled={isActionPending}
                 className="bg-green-600 hover:bg-green-500 text-white text-xs h-7"
               >
-                {approve.isPending ? (
+                {(approvePaperclip.isPending || updateLocal.isPending) ? (
                   <Loader2 className="w-3 h-3 animate-spin mr-1" />
                 ) : (
                   <Check className="w-3 h-3 mr-1" />
@@ -164,11 +281,11 @@ function ApprovalCard({
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => reject.mutate(approval.id)}
-                disabled={approve.isPending || reject.isPending}
+                onClick={handleReject}
+                disabled={isActionPending}
                 className="text-red-400 border-red-500/30 hover:bg-red-500/10 text-xs h-7"
               >
-                {reject.isPending ? (
+                {rejectPaperclip.isPending ? (
                   <Loader2 className="w-3 h-3 animate-spin mr-1" />
                 ) : (
                   <X className="w-3 h-3 mr-1" />
@@ -189,13 +306,127 @@ function ApprovalCard({
   )
 }
 
+// ── New Approval Dialog ──
+
+function NewApprovalDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  const [type, setType] = useState('general')
+  const [title, setTitle] = useState('')
+  const [description, setDescription] = useState('')
+  const createApproval = useLocalCreate<Record<string, unknown>>('approvals')
+
+  const handleSubmit = () => {
+    if (!title.trim()) return
+    createApproval.mutate(
+      {
+        type,
+        title: title.trim(),
+        description: description.trim() || '',
+        status: 'pending',
+        payload: '{}',
+        createdAt: new Date().toISOString(),
+      },
+      {
+        onSuccess: () => {
+          setType('general')
+          setTitle('')
+          setDescription('')
+          onOpenChange(false)
+        },
+      }
+    )
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="bg-zinc-900 border-zinc-800 max-w-md">
+        <DialogHeader>
+          <DialogTitle className="text-zinc-100">New Approval</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-zinc-400 mb-1 block">Type</label>
+            <Select value={type} onValueChange={(v) => v && setType(v)}>
+              <SelectTrigger className="bg-zinc-800 border-zinc-700 text-zinc-200">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="bg-zinc-800 border-zinc-700">
+                <SelectItem value="general">General</SelectItem>
+                <SelectItem value="hire">Hire</SelectItem>
+                <SelectItem value="strategy">Strategy</SelectItem>
+                <SelectItem value="task_review">Task Review</SelectItem>
+                <SelectItem value="content">Content</SelectItem>
+                <SelectItem value="email">Email</SelectItem>
+                <SelectItem value="project_gate">Project Gate</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <label className="text-xs text-zinc-400 mb-1 block">Title</label>
+            <Input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Approval title..."
+              className="bg-zinc-800 border-zinc-700 text-zinc-200"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-zinc-400 mb-1 block">Description</label>
+            <Input
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Optional description..."
+              className="bg-zinc-800 border-zinc-700 text-zinc-200"
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)} className="text-zinc-400">
+            Cancel
+          </Button>
+          <Button
+            onClick={handleSubmit}
+            disabled={!title.trim() || createApproval.isPending}
+            className="bg-indigo-600 hover:bg-indigo-500 text-white"
+          >
+            {createApproval.isPending ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />
+            ) : (
+              <Plus className="w-3.5 h-3.5 mr-1" />
+            )}
+            Create
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 export default function ApprovalsPage() {
   const { companyId, status: paperclipStatus } = usePaperclip()
-  const { data: approvals } = useApprovals(companyId)
+  const { data: paperclipApprovals } = useApprovals(companyId)
+  const { data: localApprovals } = useLocalData<Record<string, unknown>>('approvals')
   const { data: agents } = useAgents(companyId)
+  const [dialogOpen, setDialogOpen] = useState(false)
 
-  const isOffline = paperclipStatus === 'disconnected'
-  const hasNoData = !approvals || approvals.length === 0
+  const paperclipConnected = paperclipStatus === 'connected'
+
+  // Merge local + Paperclip approvals
+  const merged = useMergedList(localApprovals, paperclipApprovals, paperclipConnected)
+
+  // Normalize
+  const allApprovals = useMemo(() => {
+    return merged.items.map((item) =>
+      normalizeApproval(item.data as Record<string, unknown>, item.source, item.readonly)
+    )
+  }, [merged.items])
+
+  const hasNoData = allApprovals.length === 0
 
   const agentMap = useMemo(() => {
     const map: Record<string, string> = {}
@@ -207,32 +438,41 @@ export default function ApprovalsPage() {
     return map
   }, [agents])
 
-  const pendingApprovals = approvals?.filter((a) => a.status === 'pending') ?? []
-  const allApprovals = approvals ?? []
+  const pendingApprovals = allApprovals.filter((a) => a.status === 'pending')
 
   return (
     <div>
       <PageHeader
         title="Approvals"
         description="Review and action pending approval requests from your agents before important work proceeds."
+        actions={
+          <Button
+            onClick={() => setDialogOpen(true)}
+            className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs h-8"
+          >
+            <Plus className="w-3.5 h-3.5 mr-1" />
+            New Approval
+          </Button>
+        }
       />
 
       <PaperclipOfflineBanner />
 
-      {isOffline && hasNoData ? (
+      {hasNoData ? (
         <div className="bg-zinc-900 border border-zinc-800 rounded-lg">
           <EmptyState
             icon={ShieldCheck}
-            title="Paperclip is offline"
-            description="Approvals are managed through Paperclip. Connect to Paperclip to view pending requests."
-          />
-        </div>
-      ) : hasNoData ? (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-lg">
-          <EmptyState
-            icon={ShieldCheck}
-            title="No approvals yet"
-            description="Approval requests from agents will appear here. Agents can request review before sending drafts, publishing content, or completing project gates."
+            title="No approvals pending"
+            description="Create an approval request or wait for agents to submit them. Approvals from Paperclip will also appear here when connected."
+            action={
+              <Button
+                onClick={() => setDialogOpen(true)}
+                className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs"
+              >
+                <Plus className="w-3.5 h-3.5 mr-1" />
+                New Approval
+              </Button>
+            }
           />
         </div>
       ) : (
@@ -259,9 +499,9 @@ export default function ApprovalsPage() {
               <div className="space-y-2">
                 {pendingApprovals.map((approval) => (
                   <ApprovalCard
-                    key={approval.id}
+                    key={`${approval.source}-${approval.id}`}
                     approval={approval}
-                    agentName={approval.requestedById ? agentMap[approval.requestedById] : undefined}
+                    agentName={approval.requestorAgentId ? agentMap[approval.requestorAgentId] : undefined}
                     companyId={companyId}
                   />
                 ))}
@@ -273,9 +513,9 @@ export default function ApprovalsPage() {
             <div className="space-y-2">
               {allApprovals.map((approval) => (
                 <ApprovalCard
-                  key={approval.id}
+                  key={`${approval.source}-${approval.id}`}
                   approval={approval}
-                  agentName={approval.requestedById ? agentMap[approval.requestedById] : undefined}
+                  agentName={approval.requestorAgentId ? agentMap[approval.requestorAgentId] : undefined}
                   companyId={companyId}
                 />
               ))}
@@ -283,6 +523,8 @@ export default function ApprovalsPage() {
           </TabsContent>
         </Tabs>
       )}
+
+      <NewApprovalDialog open={dialogOpen} onOpenChange={setDialogOpen} />
     </div>
   )
 }

@@ -45,6 +45,16 @@ export function getEntity(table: string, id: string) {
   return row ? parseJsonFields(row as Record<string, unknown>) : null
 }
 
+// Generic update helper
+export function updateEntity(table: string, id: string, data: Record<string, unknown>) {
+  const db = getDb()
+  const entries = Object.entries(data).filter(([key]) => key !== 'id')
+  if (entries.length === 0) return { changes: 0 }
+  const setClauses = entries.map(([key]) => `${key} = ?`).join(', ')
+  const values = entries.map(([, v]) => (typeof v === 'object' && v !== null ? JSON.stringify(v) : v))
+  return db.prepare(`UPDATE ${table} SET ${setClauses} WHERE id = ?`).run(...values, id)
+}
+
 // Generic delete
 export function deleteEntity(table: string, id: string) {
   const db = getDb()

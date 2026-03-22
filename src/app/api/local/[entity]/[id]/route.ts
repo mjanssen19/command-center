@@ -10,6 +10,10 @@ const ALLOWED_ENTITIES = [
   'schedule_jobs',
   'activity_events',
   'entity_links',
+  'issues',
+  'agents',
+  'projects',
+  'approvals',
 ]
 
 export async function GET(
@@ -29,6 +33,29 @@ export async function GET(
       return NextResponse.json({ error: 'Not found' }, { status: 404 })
     }
     return NextResponse.json({ item })
+  } catch (err) {
+    return NextResponse.json({ error: String(err) }, { status: 500 })
+  }
+}
+
+export async function PATCH(
+  request: Request,
+  { params }: { params: Promise<{ entity: string; id: string }> }
+) {
+  const { entity, id } = await params
+
+  if (!ALLOWED_ENTITIES.includes(entity)) {
+    return NextResponse.json({ error: `Unknown entity: ${entity}` }, { status: 400 })
+  }
+
+  try {
+    const body = await request.json()
+    const { updateEntity } = await import('../../../../../lib/db/operations')
+    const result = updateEntity(entity, id, body)
+    if (result.changes === 0) {
+      return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    }
+    return NextResponse.json({ updated: true })
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 })
   }

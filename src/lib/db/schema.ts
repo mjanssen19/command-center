@@ -101,12 +101,67 @@ export function initSchema(db: Database.Database) {
       confidence REAL NOT NULL DEFAULT 1.0
     );
 
+    CREATE TABLE IF NOT EXISTS issues (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'backlog',
+      priority TEXT NOT NULL DEFAULT 'medium',
+      project_id TEXT,
+      assignee_agent_id TEXT,
+      due_date TEXT,
+      labels TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS agents (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT '',
+      model TEXT NOT NULL DEFAULT '',
+      provider TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'offline',
+      adapter_type TEXT NOT NULL DEFAULT 'manual',
+      source TEXT NOT NULL DEFAULT 'local',
+      config_path TEXT,
+      last_heartbeat_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS projects (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'active',
+      owner_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS approvals (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL DEFAULT 'general',
+      status TEXT NOT NULL DEFAULT 'pending',
+      requestor_agent_id TEXT,
+      title TEXT NOT NULL DEFAULT '',
+      description TEXT NOT NULL DEFAULT '',
+      payload TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      resolved_at TEXT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_documents_path ON documents(path);
     CREATE INDEX IF NOT EXISTS idx_documents_type ON documents(type);
     CREATE INDEX IF NOT EXISTS idx_memories_date ON memories(date);
     CREATE INDEX IF NOT EXISTS idx_activity_timestamp ON activity_events(timestamp);
     CREATE INDEX IF NOT EXISTS idx_entity_links_from ON entity_links(from_type, from_id);
     CREATE INDEX IF NOT EXISTS idx_entity_links_to ON entity_links(to_type, to_id);
+    CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status);
+    CREATE INDEX IF NOT EXISTS idx_issues_project ON issues(project_id);
+    CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status);
+    CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status);
+    CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status);
   `)
 
   // FTS5 virtual table — separate exec because CREATE VIRTUAL TABLE
