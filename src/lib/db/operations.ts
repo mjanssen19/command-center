@@ -16,16 +16,33 @@ export function insertEntity(table: string, data: Record<string, unknown>) {
   return id
 }
 
+// Parse JSON string fields that should be arrays/objects
+function parseJsonFields(row: Record<string, unknown>): Record<string, unknown> {
+  const result = { ...row }
+  for (const [key, value] of Object.entries(result)) {
+    if (typeof value === 'string' && (value.startsWith('[') || value.startsWith('{'))) {
+      try {
+        result[key] = JSON.parse(value)
+      } catch {
+        // leave as string if not valid JSON
+      }
+    }
+  }
+  return result
+}
+
 // Generic list helper
 export function listEntities(table: string, limit = 100, offset = 0) {
   const db = getDb()
-  return db.prepare(`SELECT * FROM ${table} ORDER BY rowid DESC LIMIT ? OFFSET ?`).all(limit, offset)
+  const rows = db.prepare(`SELECT * FROM ${table} ORDER BY rowid DESC LIMIT ? OFFSET ?`).all(limit, offset)
+  return rows.map((row) => parseJsonFields(row as Record<string, unknown>))
 }
 
 // Generic get by ID
 export function getEntity(table: string, id: string) {
   const db = getDb()
-  return db.prepare(`SELECT * FROM ${table} WHERE id = ?`).get(id)
+  const row = db.prepare(`SELECT * FROM ${table} WHERE id = ?`).get(id)
+  return row ? parseJsonFields(row as Record<string, unknown>) : null
 }
 
 // Generic delete

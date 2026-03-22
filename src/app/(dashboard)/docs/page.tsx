@@ -105,7 +105,7 @@ function DocListItem({
           <span className="text-[10px] text-zinc-500">{relativeTime(doc.mtime)}</span>
           <span className="text-[10px] text-zinc-500 uppercase font-medium">{fileType}</span>
         </div>
-        {doc.tags && doc.tags.length > 0 && (
+        {Array.isArray(doc.tags) && doc.tags.length > 0 && (
           <div className="flex gap-1 mt-1.5 flex-wrap">
             {doc.tags.slice(0, 3).map((tag) => (
               <span
@@ -199,7 +199,7 @@ function DocPreview({ doc }: { doc: Document | null }) {
               </span>
             </div>
           )}
-          {doc.tags && doc.tags.length > 0 && (
+          {Array.isArray(doc.tags) && doc.tags.length > 0 && (
             <div className="flex items-center gap-2 col-span-2">
               <Tag className="w-3 h-3 text-zinc-600" />
               <div className="flex gap-1 flex-wrap">
@@ -238,7 +238,7 @@ export default function DocsPage() {
         (d) =>
           d.title?.toLowerCase().includes(q) ||
           d.path?.toLowerCase().includes(q) ||
-          d.tags?.some((t) => t.toLowerCase().includes(q))
+          (Array.isArray(d.tags) && d.tags.some((t) => t.toLowerCase().includes(q)))
       )
     }
 
