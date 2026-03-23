@@ -19,6 +19,7 @@ import {
   RotateCcw,
   AlertCircle,
   ChevronRight,
+  Calendar,
 } from 'lucide-react'
 import { PageHeader } from '@/components/common/PageHeader'
 import { MetricCard } from '@/components/cards/MetricCard'
@@ -56,7 +57,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import type { PaperclipIssue, PaperclipActivity, PaperclipRun } from '@/lib/paperclip/types'
+import type { PaperclipIssue, PaperclipRun } from '@/lib/paperclip/types'
 import type { DataSource } from '@/lib/entities/types'
 
 // ── Constants ──
@@ -92,6 +93,7 @@ interface NormalizedTask {
   priority?: string
   projectId?: string
   assigneeId?: string
+  dueDate?: string
   labels?: string[]
   createdAt: string
   updatedAt: string
@@ -121,6 +123,13 @@ function relativeTime(dateStr: string): string {
 
 function columnLabel(key: string): string {
   return KANBAN_COLUMNS.find((c) => c.key === key)?.label ?? key
+}
+
+/** Extract emoji from beginning of a string if present */
+function extractEmoji(str: string): string | null {
+  const emojiRegex = /^(\p{Emoji_Presentation}|\p{Emoji}\uFE0F)/u
+  const match = str.match(emojiRegex)
+  return match ? match[0] : null
 }
 
 /** Normalize a merged item into a common display shape */
@@ -155,6 +164,7 @@ function normalizeTask(
     priority: data.priority ? String(data.priority) : undefined,
     projectId: data.project_id ? String(data.project_id) : undefined,
     assigneeId: data.assignee_agent_id ? String(data.assignee_agent_id) : undefined,
+    dueDate: data.due_date ? String(data.due_date) : undefined,
     labels: Array.isArray(data.labels) ? (data.labels as string[]) : [],
     createdAt: String(data.created_at ?? new Date().toISOString()),
     updatedAt: String(data.updated_at ?? new Date().toISOString()),
@@ -184,6 +194,17 @@ async function logLocalActivity(data: {
   } catch {
     // Silently fail — local logging should not block UI
   }
+}
+
+// ── Unified activity event type ──
+
+interface UnifiedActivityEvent {
+  id: string
+  type: string
+  summary: string
+  timestamp: string
+  source: DataSource
+  issueId?: string
 }
 
 // ── State Flow Visualization ──
@@ -227,25 +248,23 @@ function TaskCard({
   onClick,
 }: {
   task: NormalizedTask
-  agents: Record<string, string>
-  activities: PaperclipActivity[]
+  agents: Record<string, { name: string; emoji?: string | null }>
+  activities: UnifiedActivityEvent[]
   runs: PaperclipRun[]
   onClick: () => void
 }) {
   const priorityColor = PRIORITY_COLORS[task.priority ?? ''] ?? 'bg-zinc-600'
-  const agentName = task.assigneeId ? agents[task.assigneeId] : undefined
+  const agentInfo = task.assigneeId ? agents[task.assigneeId] : undefined
 
   // Check if agent is currently running on this task
   const isAgentRunning = runs.some(
     (r) => r.status === 'running' && r.agentId === task.assigneeId
   )
 
-  // Last agent action from activity feed (Paperclip only)
-  const lastActivity = task.source === 'paperclip'
-    ? activities
-        .filter((a) => a.issueId === task.id)
-        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0]
-    : undefined
+  // Last agent action from activity feed (any source)
+  const lastActivity = activities
+    .filter((a) => a.issueId === task.id)
+    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0]
 
   // Run count for this task
   const taskRuns = task.assigneeId
@@ -290,15 +309,21 @@ function TaskCard({
             {task.projectId.slice(0, 8)}
           </Badge>
         )}
-        {agentName && (
+        {agentInfo && (
           <div className="flex items-center gap-1">
             <div className="w-4 h-4 rounded-full bg-indigo-600 flex items-center justify-center">
               <span className="text-[8px] font-bold text-white">
-                {agentName.charAt(0).toUpperCase()}
+                {agentInfo.emoji ?? agentInfo.name.charAt(0).toUpperCase()}
               </span>
             </div>
-            <span className="text-[10px] text-zinc-500">{agentName}</span>
+            <span className="text-[10px] text-zinc-500">{agentInfo.name}</span>
           </div>
+        )}
+        {task.dueDate && (
+          <span className="text-[10px] text-zinc-500 flex items-center gap-0.5">
+            <Calendar className="w-2.5 h-2.5" />
+            {new Date(task.dueDate).toLocaleDateString()}
+          </span>
         )}
         {taskRuns > 0 && (
           <span className="text-[10px] text-zinc-600 flex items-center gap-0.5">
@@ -328,8 +353,8 @@ function KanbanColumn({
   label: string
   color: string
   tasks: NormalizedTask[]
-  agents: Record<string, string>
-  activities: PaperclipActivity[]
+  agents: Record<string, { name: string; emoji?: string | null }>
+  activities: UnifiedActivityEvent[]
   runs: PaperclipRun[]
   onTaskClick: (task: NormalizedTask) => void
   companyId: string | undefined
@@ -438,9 +463,9 @@ function KanbanColumn({
   )
 }
 
-// ── Activity Sidebar ──
+// ── Activity Sidebar ── (now uses local + Paperclip events)
 
-function ActivitySidebar({ activities }: { activities: PaperclipActivity[] }) {
+function ActivitySidebar({ activities }: { activities: UnifiedActivityEvent[] }) {
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center gap-2 px-4 py-3 border-b border-zinc-800">
@@ -456,12 +481,15 @@ function ActivitySidebar({ activities }: { activities: PaperclipActivity[] }) {
           </div>
         ) : (
           <div className="p-2 space-y-1">
-            {activities.slice(0, 20).map((event) => (
+            {activities.slice(0, 30).map((event) => (
               <div
-                key={event.id}
+                key={`${event.source}-${event.id}`}
                 className="px-2 py-1.5 rounded-md hover:bg-zinc-800/50 transition-colors"
               >
-                <p className="text-xs text-zinc-300 leading-snug">{event.summary}</p>
+                <div className="flex items-center gap-1 mb-0.5">
+                  <p className="text-xs text-zinc-300 leading-snug flex-1">{event.summary}</p>
+                  <SourceBadge source={event.source} />
+                </div>
                 <p className="text-[10px] text-zinc-600 mt-0.5">
                   {relativeTime(event.timestamp)}
                 </p>
@@ -485,8 +513,8 @@ function TaskDetailPanel({
   onClose,
 }: {
   task: NormalizedTask
-  agents: Record<string, string>
-  activities: PaperclipActivity[]
+  agents: Record<string, { name: string; emoji?: string | null }>
+  activities: UnifiedActivityEvent[]
   comments: unknown[] | undefined
   companyId: string | undefined
   onClose: () => void
@@ -494,17 +522,15 @@ function TaskDetailPanel({
   const updatePaperclipIssue = useUpdateIssue(companyId)
   const updateLocalIssue = useLocalUpdate('issues')
   const col = mapStatusToColumn(task.status)
-  const agentName = task.assigneeId ? agents[task.assigneeId] : undefined
+  const agentInfo = task.assigneeId ? agents[task.assigneeId] : undefined
 
-  // Filter activities for this issue (Paperclip only)
-  const issueActivities = task.source === 'paperclip'
-    ? activities
-        .filter((a) => a.issueId === task.id)
-        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-    : []
+  // Filter activities for this issue (both local and Paperclip)
+  const issueActivities = activities
+    .filter((a) => a.issueId === task.id)
+    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
 
   // Merge comments into timeline
-  const commentEvents: Array<{ id: string; type: string; summary: string; timestamp: string }> =
+  const commentEvents: Array<{ id: string; type: string; summary: string; timestamp: string; source: DataSource }> =
     Array.isArray(comments)
       ? comments.map((raw: unknown, idx: number) => {
           const c = raw as Record<string, unknown>
@@ -513,6 +539,7 @@ function TaskDetailPanel({
             type: 'comment',
             summary: String(c.body || c.content || 'Comment'),
             timestamp: String(c.createdAt || c.timestamp || ''),
+            source: 'paperclip' as DataSource,
           }
         })
       : []
@@ -523,6 +550,7 @@ function TaskDetailPanel({
       type: a.type,
       summary: a.summary,
       timestamp: a.timestamp,
+      source: a.source,
     })),
     ...commentEvents.filter((c) => c.timestamp),
   ].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
@@ -597,10 +625,20 @@ function TaskDetailPanel({
                 {task.priority}
               </span>
             )}
-            {agentName && (
+            {agentInfo && (
               <span className="flex items-center gap-1 text-[10px] text-zinc-500">
-                <User className="w-2.5 h-2.5" />
-                {agentName}
+                {agentInfo.emoji ? (
+                  <span className="text-xs">{agentInfo.emoji}</span>
+                ) : (
+                  <User className="w-2.5 h-2.5" />
+                )}
+                {agentInfo.name}
+              </span>
+            )}
+            {task.dueDate && (
+              <span className="flex items-center gap-1 text-[10px] text-zinc-500">
+                <Calendar className="w-2.5 h-2.5" />
+                {new Date(task.dueDate).toLocaleDateString()}
               </span>
             )}
           </div>
@@ -682,7 +720,7 @@ function TaskDetailPanel({
           ) : (
             <div className="space-y-2">
               {timeline.map((event) => (
-                <div key={event.id} className="flex items-start gap-2">
+                <div key={`${event.source}-${event.id}`} className="flex items-start gap-2">
                   <div className="mt-0.5 shrink-0">{eventIcon(event.type)}</div>
                   <div className="min-w-0 flex-1">
                     <p className="text-xs text-zinc-300 leading-snug">{event.summary}</p>
@@ -692,6 +730,7 @@ function TaskDetailPanel({
                       </p>
                     )}
                   </div>
+                  <SourceBadge source={event.source} />
                 </div>
               ))}
             </div>
@@ -707,44 +746,56 @@ function TaskDetailPanel({
 function NewTaskDialog({
   open,
   onOpenChange,
+  localAgents,
+  localProjects,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
+  localAgents: Record<string, unknown>[]
+  localProjects: Record<string, unknown>[]
 }) {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [status, setStatus] = useState('backlog')
   const [priority, setPriority] = useState('medium')
+  const [assigneeAgentId, setAssigneeAgentId] = useState('')
+  const [projectId, setProjectId] = useState('')
+  const [dueDate, setDueDate] = useState('')
   const createLocalIssue = useLocalCreate<Record<string, unknown>>('issues')
 
   const handleSubmit = () => {
     if (!title.trim()) return
-    createLocalIssue.mutate(
-      {
-        title: title.trim(),
-        description: description.trim() || '',
-        status,
-        priority,
-        labels: '[]',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+    const data: Record<string, unknown> = {
+      title: title.trim(),
+      description: description.trim() || '',
+      status,
+      priority,
+      labels: '[]',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
+    if (assigneeAgentId) data.assigneeAgentId = assigneeAgentId
+    if (projectId) data.projectId = projectId
+    if (dueDate) data.dueDate = dueDate
+
+    createLocalIssue.mutate(data, {
+      onSuccess: () => {
+        logLocalActivity({
+          type: 'task_created',
+          entityType: 'issue',
+          entityId: '',
+          summary: `User created task '${title.trim()}'`,
+        })
+        setTitle('')
+        setDescription('')
+        setStatus('backlog')
+        setPriority('medium')
+        setAssigneeAgentId('')
+        setProjectId('')
+        setDueDate('')
+        onOpenChange(false)
       },
-      {
-        onSuccess: () => {
-          logLocalActivity({
-            type: 'task_created',
-            entityType: 'issue',
-            entityId: '',
-            summary: `User created task '${title.trim()}'`,
-          })
-          setTitle('')
-          setDescription('')
-          setStatus('backlog')
-          setPriority('medium')
-          onOpenChange(false)
-        },
-      }
-    )
+    })
   }
 
   return (
@@ -802,6 +853,57 @@ function NewTaskDialog({
               </Select>
             </div>
           </div>
+          <div>
+            <label className="text-xs text-zinc-400 mb-1 block">Assign to Agent</label>
+            <Select value={assigneeAgentId} onValueChange={(v) => v !== null && setAssigneeAgentId(v)}>
+              <SelectTrigger className="bg-zinc-800 border-zinc-700 text-zinc-200">
+                <SelectValue placeholder="No agent assigned" />
+              </SelectTrigger>
+              <SelectContent className="bg-zinc-800 border-zinc-700">
+                <SelectItem value="">None</SelectItem>
+                {localAgents.map((agent) => {
+                  const id = String(agent.id ?? '')
+                  const name = String(agent.name ?? '')
+                  const role = String(agent.role ?? '')
+                  const emoji = extractEmoji(role)
+                  return (
+                    <SelectItem key={id} value={id}>
+                      {emoji ? `${emoji} ` : ''}{name}
+                    </SelectItem>
+                  )
+                })}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <label className="text-xs text-zinc-400 mb-1 block">Project</label>
+            <Select value={projectId} onValueChange={(v) => v !== null && setProjectId(v)}>
+              <SelectTrigger className="bg-zinc-800 border-zinc-700 text-zinc-200">
+                <SelectValue placeholder="No project" />
+              </SelectTrigger>
+              <SelectContent className="bg-zinc-800 border-zinc-700">
+                <SelectItem value="">None</SelectItem>
+                {localProjects.map((project) => {
+                  const id = String(project.id ?? '')
+                  const name = String(project.name ?? '')
+                  return (
+                    <SelectItem key={id} value={id}>
+                      {name}
+                    </SelectItem>
+                  )
+                })}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <label className="text-xs text-zinc-400 mb-1 block">Due Date</label>
+            <Input
+              type="date"
+              value={dueDate}
+              onChange={(e) => setDueDate(e.target.value)}
+              className="bg-zinc-800 border-zinc-700 text-zinc-200"
+            />
+          </div>
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)} className="text-zinc-400">
@@ -835,8 +937,8 @@ function TaskDetailPanelWrapper({
   onClose,
 }: {
   task: NormalizedTask
-  agents: Record<string, string>
-  activities: PaperclipActivity[]
+  agents: Record<string, { name: string; emoji?: string | null }>
+  activities: UnifiedActivityEvent[]
   companyId: string | undefined
   onClose: () => void
 }) {
@@ -864,8 +966,11 @@ export default function TasksPage() {
   const { companyId, status: paperclipStatus } = usePaperclip()
   const { data: paperclipIssues, dataUpdatedAt } = useIssues(companyId)
   const { data: localIssues } = useLocalData<Record<string, unknown>>('issues')
-  const { data: activities } = useActivity(companyId)
-  const { data: agents } = useAgents(companyId)
+  const { data: paperclipActivities } = useActivity(companyId)
+  const { data: localActivityEvents } = useLocalData<Record<string, unknown>>('activity_events')
+  const { data: paperclipAgents } = useAgents(companyId)
+  const { data: localAgents } = useLocalData<Record<string, unknown>>('agents')
+  const { data: localProjects } = useLocalData<Record<string, unknown>>('projects')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [activityOpen, setActivityOpen] = useState(true)
   const [selectedTask, setSelectedTask] = useState<NormalizedTask | null>(null)
@@ -887,15 +992,63 @@ export default function TasksPage() {
   // Fetch runs for the selected task's agent
   const { data: allRuns } = useAgentRuns(companyId, selectedTask?.assigneeId ?? undefined)
 
+  // Build unified agent map from local agents first, then Paperclip agents
   const agentMap = useMemo(() => {
-    const map: Record<string, string> = {}
-    if (agents) {
-      for (const a of agents) {
-        map[a.id] = a.name
+    const map: Record<string, { name: string; emoji?: string | null }> = {}
+    // Local agents first (primary)
+    if (localAgents) {
+      for (const a of localAgents) {
+        const id = String(a.id ?? '')
+        const name = String(a.name ?? '')
+        const role = String(a.role ?? '')
+        const emoji = extractEmoji(role)
+        map[id] = { name, emoji }
+      }
+    }
+    // Paperclip agents as fallback
+    if (paperclipAgents) {
+      for (const a of paperclipAgents) {
+        if (!map[a.id]) {
+          map[a.id] = { name: a.name, emoji: null }
+        }
       }
     }
     return map
-  }, [agents])
+  }, [localAgents, paperclipAgents])
+
+  // Unified activity events: local activity_events + Paperclip activity
+  const unifiedActivities = useMemo(() => {
+    const events: UnifiedActivityEvent[] = []
+    // Local activity events (always present)
+    if (localActivityEvents) {
+      for (const e of localActivityEvents) {
+        events.push({
+          id: String(e.id ?? ''),
+          type: String(e.type ?? ''),
+          summary: String(e.summary ?? ''),
+          timestamp: String(e.timestamp ?? ''),
+          source: 'local',
+          issueId: e.entity_type === 'issue' ? String(e.entity_id ?? '') : undefined,
+        })
+      }
+    }
+    // Paperclip activity (when connected)
+    if (paperclipActivities) {
+      for (const a of paperclipActivities) {
+        events.push({
+          id: a.id,
+          type: a.type,
+          summary: a.summary,
+          timestamp: a.timestamp,
+          source: 'paperclip',
+          issueId: a.issueId,
+        })
+      }
+    }
+    // Sort by newest first
+    events.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+    return events
+  }, [localActivityEvents, paperclipActivities])
 
   const filteredTasks = useMemo(() => {
     return allTasks.filter((task) => {
@@ -1074,7 +1227,7 @@ export default function TasksPage() {
                 color={col.color}
                 tasks={columnTasks[col.key] ?? []}
                 agents={agentMap}
-                activities={activities ?? []}
+                activities={unifiedActivities}
                 runs={allRuns ?? []}
                 onTaskClick={handleTaskClick}
                 companyId={companyId}
@@ -1088,7 +1241,7 @@ export default function TasksPage() {
             <TaskDetailPanelWrapper
               task={currentSelectedTask}
               agents={agentMap}
-              activities={activities ?? []}
+              activities={unifiedActivities}
               companyId={companyId}
               onClose={() => setSelectedTask(null)}
             />
@@ -1097,7 +1250,7 @@ export default function TasksPage() {
           {/* Activity sidebar */}
           {activityOpen && !currentSelectedTask && (
             <div className="w-72 shrink-0 bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
-              <ActivitySidebar activities={activities ?? []} />
+              <ActivitySidebar activities={unifiedActivities} />
             </div>
           )}
         </div>
@@ -1106,6 +1259,8 @@ export default function TasksPage() {
       <NewTaskDialog
         open={dialogOpen}
         onOpenChange={setDialogOpen}
+        localAgents={localAgents ?? []}
+        localProjects={localProjects ?? []}
       />
     </div>
   )

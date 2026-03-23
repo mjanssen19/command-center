@@ -10,13 +10,14 @@ import {
   Loader2,
   MessageSquare,
   Plus,
+  Link2,
 } from 'lucide-react'
 import { PageHeader } from '@/components/common/PageHeader'
 import { EmptyState } from '@/components/common/EmptyState'
 import { PaperclipOfflineBanner } from '@/components/common/PaperclipOfflineBanner'
 import { SourceBadge } from '@/components/common/SourceBadge'
 import { usePaperclip } from '@/lib/paperclip'
-import { useApprovals, useApproveApproval, useRejectApproval, useAgents } from '@/lib/paperclip/hooks'
+import { useApprovals, useApproveApproval, useRejectApproval } from '@/lib/paperclip/hooks'
 import { useLocalData } from '@/lib/hooks/useLocalData'
 import { useLocalCreate, useLocalUpdate } from '@/lib/hooks/useLocalMutations'
 import { useMergedList } from '@/lib/hooks/useMergedData'
@@ -67,6 +68,8 @@ interface NormalizedApproval {
   title?: string
   description?: string
   requestorAgentId?: string
+  entityType?: string
+  entityId?: string
   payload?: Record<string, unknown>
   createdAt: string
   resolvedAt?: string
@@ -94,6 +97,18 @@ function normalizeApproval(
     }
   }
   // Local SQLite — snake_case
+  // Extract entity_type/entity_id from payload JSON or direct fields
+  let entityType: string | undefined
+  let entityId: string | undefined
+  if (typeof data.payload === 'object' && data.payload !== null) {
+    const payload = data.payload as Record<string, unknown>
+    entityType = payload.entity_type ? String(payload.entity_type) : undefined
+    entityId = payload.entity_id ? String(payload.entity_id) : undefined
+  }
+  // Direct fields take precedence
+  if (data.entity_type) entityType = String(data.entity_type)
+  if (data.entity_id) entityId = String(data.entity_id)
+
   return {
     id: String(data.id ?? ''),
     type: String(data.type ?? 'general'),
@@ -101,6 +116,8 @@ function normalizeApproval(
     title: data.title ? String(data.title) : undefined,
     description: data.description ? String(data.description) : undefined,
     requestorAgentId: data.requestor_agent_id ? String(data.requestor_agent_id) : undefined,
+    entityType,
+    entityId,
     payload: typeof data.payload === 'object' && data.payload !== null
       ? (data.payload as Record<string, unknown>)
       : undefined,
@@ -134,17 +151,42 @@ function formatPayload(approval: NormalizedApproval): string {
   if (payload.message && typeof payload.message === 'string') return payload.message
   if (payload.title && typeof payload.title === 'string') return payload.title
   // Fallback: show first few keys
-  const keys = Object.keys(payload).slice(0, 3)
-  return keys.map((k) => `${k}: ${String(payload[k]).slice(0, 50)}`).join(', ')
+  const keys = Object.keys(payload).filter(k => k !== 'entity_type' && k !== 'entity_id').slice(0, 3)
+  return keys.map((k) => `${k}: ${String(payload[k]).slice(0, 50)}`).join(', ') || 'No details provided'
+}
+
+// ── Linked entity badge ──
+
+function LinkedEntityBadge({
+  entityType,
+  entityId,
+  entityName,
+}: {
+  entityType: string
+  entityId: string
+  entityName?: string
+}) {
+  const typeLabel = entityType.charAt(0).toUpperCase() + entityType.slice(1)
+  return (
+    <div className="flex items-center gap-1.5 px-2 py-1 bg-zinc-800 rounded-md text-[10px]">
+      <Link2 className="w-3 h-3 text-zinc-500" />
+      <span className="text-zinc-400">{typeLabel}:</span>
+      <span className="text-zinc-300 font-medium">
+        {entityName ?? entityId.slice(0, 12)}
+      </span>
+    </div>
+  )
 }
 
 function ApprovalCard({
   approval,
   agentName,
+  entityName,
   companyId,
 }: {
   approval: NormalizedApproval
   agentName: string | undefined
+  entityName: string | undefined
   companyId: string | undefined
 }) {
   const [expanded, setExpanded] = useState(false)
@@ -211,6 +253,11 @@ function ApprovalCard({
           </div>
         </div>
 
+        {/* Linked entity indicator */}
+        {approval.entityType && approval.entityId && (
+          <Link2 className="w-3 h-3 text-zinc-500 shrink-0" />
+        )}
+
         {/* Source + Status */}
         <SourceBadge source={approval.source} />
         <Badge
@@ -229,6 +276,17 @@ function ApprovalCard({
 
       {expanded && (
         <div className="border-t border-zinc-800 px-4 py-3">
+          {/* Linked entity badge */}
+          {approval.entityType && approval.entityId && (
+            <div className="mb-3">
+              <LinkedEntityBadge
+                entityType={approval.entityType}
+                entityId={approval.entityId}
+                entityName={entityName}
+              />
+            </div>
+          )}
+
           {/* Full details */}
           <div className="mb-3">
             <h4 className="text-[10px] text-zinc-600 uppercase tracking-wider mb-2 font-semibold">
@@ -242,7 +300,16 @@ function ApprovalCard({
             )}
             {approval.payload ? (
               <pre className="text-xs text-zinc-400 bg-zinc-800 rounded-md p-3 overflow-x-auto max-h-48 font-mono">
-                {JSON.stringify(approval.payload, null, 2)}
+                {JSON.stringify(
+                  // Filter out entity_type/entity_id from display
+                  Object.fromEntries(
+                    Object.entries(approval.payload).filter(
+                      ([k]) => k !== 'entity_type' && k !== 'entity_id'
+                    )
+                  ),
+                  null,
+                  2
+                )}
               </pre>
             ) : (
               !approval.title && !approval.description && (
@@ -311,24 +378,51 @@ function ApprovalCard({
 function NewApprovalDialog({
   open,
   onOpenChange,
+  localTasks,
+  localProjects,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
+  localTasks: Record<string, unknown>[]
+  localProjects: Record<string, unknown>[]
 }) {
   const [type, setType] = useState('general')
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
+  const [linkedType, setLinkedType] = useState('')
+  const [linkedEntityId, setLinkedEntityId] = useState('')
   const createApproval = useLocalCreate<Record<string, unknown>>('approvals')
+
+  const linkedEntities = useMemo(() => {
+    if (linkedType === 'task') {
+      return localTasks.map((t) => ({
+        id: String(t.id ?? ''),
+        name: String(t.title ?? ''),
+      }))
+    }
+    if (linkedType === 'project') {
+      return localProjects.map((p) => ({
+        id: String(p.id ?? ''),
+        name: String(p.name ?? ''),
+      }))
+    }
+    return []
+  }, [linkedType, localTasks, localProjects])
 
   const handleSubmit = () => {
     if (!title.trim()) return
+    const payload: Record<string, unknown> = {}
+    if (linkedType && linkedEntityId) {
+      payload.entity_type = linkedType
+      payload.entity_id = linkedEntityId
+    }
     createApproval.mutate(
       {
         type,
         title: title.trim(),
         description: description.trim() || '',
         status: 'pending',
-        payload: '{}',
+        payload: JSON.stringify(payload),
         createdAt: new Date().toISOString(),
       },
       {
@@ -336,6 +430,8 @@ function NewApprovalDialog({
           setType('general')
           setTitle('')
           setDescription('')
+          setLinkedType('')
+          setLinkedEntityId('')
           onOpenChange(false)
         },
       }
@@ -384,6 +480,39 @@ function NewApprovalDialog({
               className="bg-zinc-800 border-zinc-700 text-zinc-200"
             />
           </div>
+          <div>
+            <label className="text-xs text-zinc-400 mb-1 block">Linked to</label>
+            <Select value={linkedType} onValueChange={(v) => { if (v !== null) setLinkedType(v); setLinkedEntityId('') }}>
+              <SelectTrigger className="bg-zinc-800 border-zinc-700 text-zinc-200">
+                <SelectValue placeholder="None" />
+              </SelectTrigger>
+              <SelectContent className="bg-zinc-800 border-zinc-700">
+                <SelectItem value="">None</SelectItem>
+                <SelectItem value="task">Task</SelectItem>
+                <SelectItem value="project">Project</SelectItem>
+                <SelectItem value="content">Content</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          {linkedType && linkedType !== 'content' && linkedEntities.length > 0 && (
+            <div>
+              <label className="text-xs text-zinc-400 mb-1 block">
+                Select {linkedType === 'task' ? 'Task' : 'Project'}
+              </label>
+              <Select value={linkedEntityId} onValueChange={(v) => v !== null && setLinkedEntityId(v)}>
+                <SelectTrigger className="bg-zinc-800 border-zinc-700 text-zinc-200">
+                  <SelectValue placeholder={`Choose a ${linkedType}...`} />
+                </SelectTrigger>
+                <SelectContent className="bg-zinc-800 border-zinc-700">
+                  {linkedEntities.map((entity) => (
+                    <SelectItem key={entity.id} value={entity.id}>
+                      {entity.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)} className="text-zinc-400">
@@ -411,7 +540,9 @@ export default function ApprovalsPage() {
   const { companyId, status: paperclipStatus } = usePaperclip()
   const { data: paperclipApprovals } = useApprovals(companyId)
   const { data: localApprovals } = useLocalData<Record<string, unknown>>('approvals')
-  const { data: agents } = useAgents(companyId)
+  const { data: localAgents } = useLocalData<Record<string, unknown>>('agents')
+  const { data: localTasks } = useLocalData<Record<string, unknown>>('issues')
+  const { data: localProjects } = useLocalData<Record<string, unknown>>('projects')
   const [dialogOpen, setDialogOpen] = useState(false)
 
   const paperclipConnected = paperclipStatus === 'connected'
@@ -428,15 +559,32 @@ export default function ApprovalsPage() {
 
   const hasNoData = allApprovals.length === 0
 
+  // Agent map from local agents (primary) — no Paperclip agents dependency
   const agentMap = useMemo(() => {
     const map: Record<string, string> = {}
-    if (agents) {
-      for (const a of agents) {
-        map[a.id] = a.name
+    if (localAgents) {
+      for (const a of localAgents) {
+        map[String(a.id ?? '')] = String(a.name ?? '')
       }
     }
     return map
-  }, [agents])
+  }, [localAgents])
+
+  // Entity name lookup map (tasks + projects)
+  const entityNameMap = useMemo(() => {
+    const map: Record<string, string> = {}
+    if (localTasks) {
+      for (const t of localTasks) {
+        map[`task:${String(t.id ?? '')}`] = String(t.title ?? '')
+      }
+    }
+    if (localProjects) {
+      for (const p of localProjects) {
+        map[`project:${String(p.id ?? '')}`] = String(p.name ?? '')
+      }
+    }
+    return map
+  }, [localTasks, localProjects])
 
   const pendingApprovals = allApprovals.filter((a) => a.status === 'pending')
 
@@ -502,6 +650,11 @@ export default function ApprovalsPage() {
                     key={`${approval.source}-${approval.id}`}
                     approval={approval}
                     agentName={approval.requestorAgentId ? agentMap[approval.requestorAgentId] : undefined}
+                    entityName={
+                      approval.entityType && approval.entityId
+                        ? entityNameMap[`${approval.entityType}:${approval.entityId}`]
+                        : undefined
+                    }
                     companyId={companyId}
                   />
                 ))}
@@ -516,6 +669,11 @@ export default function ApprovalsPage() {
                   key={`${approval.source}-${approval.id}`}
                   approval={approval}
                   agentName={approval.requestorAgentId ? agentMap[approval.requestorAgentId] : undefined}
+                  entityName={
+                    approval.entityType && approval.entityId
+                      ? entityNameMap[`${approval.entityType}:${approval.entityId}`]
+                      : undefined
+                  }
                   companyId={companyId}
                 />
               ))}
@@ -524,7 +682,12 @@ export default function ApprovalsPage() {
         </Tabs>
       )}
 
-      <NewApprovalDialog open={dialogOpen} onOpenChange={setDialogOpen} />
+      <NewApprovalDialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        localTasks={localTasks ?? []}
+        localProjects={localProjects ?? []}
+      />
     </div>
   )
 }

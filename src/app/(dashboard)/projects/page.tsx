@@ -9,6 +9,8 @@ import {
   Clock,
   Plus,
   Loader2,
+  Users,
+  Bot,
 } from 'lucide-react'
 import { PageHeader } from '@/components/common/PageHeader'
 import { EmptyState } from '@/components/common/EmptyState'
@@ -56,6 +58,13 @@ const PRIORITY_COLORS: Record<string, string> = {
   low: 'bg-zinc-500',
 }
 
+/** Extract emoji from beginning of a string if present */
+function extractEmoji(str: string): string | null {
+  const emojiRegex = /^(\p{Emoji_Presentation}|\p{Emoji}\uFE0F)/u
+  const match = str.match(emojiRegex)
+  return match ? match[0] : null
+}
+
 // ── Normalized display type ──
 
 interface NormalizedProject {
@@ -63,6 +72,7 @@ interface NormalizedProject {
   name: string
   description?: string
   status: string
+  ownerId?: string
   createdAt: string
   source: DataSource
   readonly: boolean
@@ -91,6 +101,7 @@ function normalizeProject(
     name: String(data.name ?? ''),
     description: data.description ? String(data.description) : undefined,
     status: String(data.status ?? 'active'),
+    ownerId: data.owner_id ? String(data.owner_id) : undefined,
     createdAt: String(data.created_at ?? new Date().toISOString()),
     source,
     readonly,
@@ -111,11 +122,13 @@ function ProjectCard({
   project,
   taskCount,
   doneCount,
+  ownerName,
   onClick,
 }: {
   project: NormalizedProject
   taskCount: number
   doneCount: number
+  ownerName?: string
   onClick: () => void
 }) {
   const statusCfg = PROJECT_STATUS_CONFIG[project.status] ?? PROJECT_STATUS_CONFIG.active
@@ -164,6 +177,12 @@ function ProjectCard({
           <CheckSquare className="w-3 h-3" />
           {taskCount} tasks
         </span>
+        {ownerName && (
+          <span className="flex items-center gap-1">
+            <Bot className="w-3 h-3" />
+            {ownerName}
+          </span>
+        )}
         <span className="flex items-center gap-1">
           <Clock className="w-3 h-3" />
           {relativeTime(project.createdAt)}
@@ -177,42 +196,67 @@ function ProjectDetail({
   project,
   paperclipIssues,
   localIssues,
+  localAgents,
+  agentMap,
   onBack,
 }: {
   project: NormalizedProject
   paperclipIssues: PaperclipIssue[]
   localIssues: Record<string, unknown>[]
+  localAgents: Record<string, unknown>[]
+  agentMap: Record<string, { name: string; emoji?: string | null }>
   onBack: () => void
 }) {
   const statusCfg = PROJECT_STATUS_CONFIG[project.status] ?? PROJECT_STATUS_CONFIG.active
 
-  // For Paperclip projects, show Paperclip issues; for local projects, show local issues
+  // Gather all issues for this project (local + Paperclip)
   const projectIssues = useMemo(() => {
-    if (project.source === 'paperclip') {
-      return paperclipIssues
-        .filter((i) => i.projectId === project.id)
-        .map((i) => ({
-          id: i.id,
-          title: i.title,
-          description: i.description,
-          status: i.status,
-          priority: i.priority,
-          updatedAt: i.updatedAt,
-          source: 'paperclip' as DataSource,
-        }))
+    const issues: Array<{
+      id: string
+      title: string
+      description?: string
+      status: string
+      priority?: string
+      assigneeId?: string
+      updatedAt: string
+      source: DataSource
+    }> = []
+
+    // Local issues linked by project_id
+    for (const i of localIssues) {
+      if (String(i.project_id ?? '') === project.id) {
+        issues.push({
+          id: String(i.id ?? ''),
+          title: String(i.title ?? ''),
+          description: i.description ? String(i.description) : undefined,
+          status: String(i.status ?? 'backlog'),
+          priority: i.priority ? String(i.priority) : undefined,
+          assigneeId: i.assignee_agent_id ? String(i.assignee_agent_id) : undefined,
+          updatedAt: String(i.updated_at ?? new Date().toISOString()),
+          source: 'local',
+        })
+      }
     }
-    // Local project: show local issues linked by project_id
-    return localIssues
-      .filter((i) => String(i.project_id ?? '') === project.id)
-      .map((i) => ({
-        id: String(i.id ?? ''),
-        title: String(i.title ?? ''),
-        description: i.description ? String(i.description) : undefined,
-        status: String(i.status ?? 'backlog'),
-        priority: i.priority ? String(i.priority) : undefined,
-        updatedAt: String(i.updated_at ?? new Date().toISOString()),
-        source: 'local' as DataSource,
-      }))
+
+    // Paperclip issues for Paperclip projects
+    if (project.source === 'paperclip') {
+      for (const i of paperclipIssues) {
+        if (i.projectId === project.id) {
+          issues.push({
+            id: i.id,
+            title: i.title,
+            description: i.description,
+            status: i.status,
+            priority: i.priority,
+            assigneeId: i.assigneeId,
+            updatedAt: i.updatedAt,
+            source: 'paperclip',
+          })
+        }
+      }
+    }
+
+    return issues
   }, [project, paperclipIssues, localIssues])
 
   const doneCount = projectIssues.filter(
@@ -223,6 +267,32 @@ function ProjectDetail({
   ).length
   const progress =
     projectIssues.length > 0 ? Math.round((doneCount / projectIssues.length) * 100) : 0
+
+  // Unique agents working on this project
+  const projectAgents = useMemo(() => {
+    const agentIds = new Set<string>()
+    for (const issue of projectIssues) {
+      if (issue.assigneeId) agentIds.add(issue.assigneeId)
+    }
+    // Also include owner
+    if (project.ownerId) agentIds.add(project.ownerId)
+
+    return Array.from(agentIds).map((id) => {
+      const info = agentMap[id]
+      // Also try local agents directly for extra data
+      const localAgent = localAgents.find((a) => String(a.id ?? '') === id)
+      const role = localAgent ? String(localAgent.role ?? '') : ''
+      const emoji = extractEmoji(role)
+      const source = localAgent ? String(localAgent.source ?? 'local') : ''
+      return {
+        id,
+        name: info?.name ?? id.slice(0, 8),
+        emoji: info?.emoji ?? emoji,
+        role,
+        isScanner: source === 'scanner',
+      }
+    })
+  }, [projectIssues, project.ownerId, agentMap, localAgents])
 
   return (
     <div>
@@ -280,6 +350,9 @@ function ProjectDetail({
           <TabsTrigger value="tasks" className="text-xs">
             Tasks ({projectIssues.length})
           </TabsTrigger>
+          <TabsTrigger value="agents" className="text-xs">
+            Agents ({projectAgents.length})
+          </TabsTrigger>
           <TabsTrigger value="docs" className="text-xs">
             Docs
           </TabsTrigger>
@@ -315,6 +388,17 @@ function ProjectDetail({
                 </p>
                 <p className="text-zinc-300">{doneCount}</p>
               </div>
+              {project.ownerId && agentMap[project.ownerId] && (
+                <div>
+                  <p className="text-[10px] text-zinc-600 uppercase tracking-wider mb-0.5">
+                    Owner
+                  </p>
+                  <p className="text-zinc-300">
+                    {agentMap[project.ownerId].emoji ? `${agentMap[project.ownerId].emoji} ` : ''}
+                    {agentMap[project.ownerId].name}
+                  </p>
+                </div>
+              )}
             </div>
 
             <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mt-6 mb-3">
@@ -339,6 +423,7 @@ function ProjectDetail({
             <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden divide-y divide-zinc-800">
               {projectIssues.map((issue) => {
                 const priorityColor = PRIORITY_COLORS[issue.priority ?? ''] ?? 'bg-zinc-600'
+                const agentInfo = issue.assigneeId ? agentMap[issue.assigneeId] : undefined
                 return (
                   <div
                     key={`${issue.source}-${issue.id}`}
@@ -351,6 +436,16 @@ function ProjectDetail({
                         <p className="text-[10px] text-zinc-600 truncate">{issue.description}</p>
                       )}
                     </div>
+                    {agentInfo && (
+                      <span className="text-[10px] text-zinc-500 flex items-center gap-1 shrink-0">
+                        {agentInfo.emoji ? (
+                          <span className="text-xs">{agentInfo.emoji}</span>
+                        ) : (
+                          <Bot className="w-2.5 h-2.5" />
+                        )}
+                        {agentInfo.name}
+                      </span>
+                    )}
                     <SourceBadge source={issue.source} />
                     <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4">
                       {issue.status}
@@ -361,6 +456,55 @@ function ProjectDetail({
                   </div>
                 )
               })}
+            </div>
+          )}
+        </TabsContent>
+
+        <TabsContent value="agents" className="mt-4">
+          {projectAgents.length === 0 ? (
+            <div className="bg-zinc-900 border border-zinc-800 rounded-lg">
+              <EmptyState
+                icon={Users}
+                title="No agents on this project"
+                description="Assign tasks to agents to see them listed here."
+              />
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+              {projectAgents.map((agent) => (
+                <div
+                  key={agent.id}
+                  className="bg-zinc-900 border border-zinc-800 rounded-lg p-4"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-lg bg-zinc-800 flex items-center justify-center shrink-0">
+                      {agent.emoji ? (
+                        <span className="text-lg">{agent.emoji}</span>
+                      ) : (
+                        <span className="text-sm font-bold text-zinc-400">
+                          {agent.name.charAt(0).toUpperCase()}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <h4 className="text-sm font-medium text-zinc-200 truncate">{agent.name}</h4>
+                        {agent.isScanner && (
+                          <Badge
+                            variant="outline"
+                            className="text-[9px] px-1 py-0 h-3.5 border bg-emerald-900/30 text-emerald-400 border-emerald-500/30"
+                          >
+                            OpenClaw
+                          </Badge>
+                        )}
+                      </div>
+                      {agent.role && (
+                        <p className="text-xs text-zinc-500 truncate">{agent.role}</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </TabsContent>
@@ -384,34 +528,38 @@ function ProjectDetail({
 function NewProjectDialog({
   open,
   onOpenChange,
+  localAgents,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
+  localAgents: Record<string, unknown>[]
 }) {
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [status, setStatus] = useState('active')
+  const [ownerId, setOwnerId] = useState('')
   const createProject = useLocalCreate<Record<string, unknown>>('projects')
 
   const handleSubmit = () => {
     if (!name.trim()) return
-    createProject.mutate(
-      {
-        name: name.trim(),
-        description: description.trim() || '',
-        status,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+    const data: Record<string, unknown> = {
+      name: name.trim(),
+      description: description.trim() || '',
+      status,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
+    if (ownerId) data.ownerId = ownerId
+
+    createProject.mutate(data, {
+      onSuccess: () => {
+        setName('')
+        setDescription('')
+        setStatus('active')
+        setOwnerId('')
+        onOpenChange(false)
       },
-      {
-        onSuccess: () => {
-          setName('')
-          setDescription('')
-          setStatus('active')
-          onOpenChange(false)
-        },
-      }
-    )
+    })
   }
 
   return (
@@ -454,6 +602,28 @@ function NewProjectDialog({
               </SelectContent>
             </Select>
           </div>
+          <div>
+            <label className="text-xs text-zinc-400 mb-1 block">Owner (Agent)</label>
+            <Select value={ownerId} onValueChange={(v) => v !== null && setOwnerId(v)}>
+              <SelectTrigger className="bg-zinc-800 border-zinc-700 text-zinc-200">
+                <SelectValue placeholder="No owner" />
+              </SelectTrigger>
+              <SelectContent className="bg-zinc-800 border-zinc-700">
+                <SelectItem value="">None</SelectItem>
+                {localAgents.map((agent) => {
+                  const id = String(agent.id ?? '')
+                  const agentName = String(agent.name ?? '')
+                  const role = String(agent.role ?? '')
+                  const emoji = extractEmoji(role)
+                  return (
+                    <SelectItem key={id} value={id}>
+                      {emoji ? `${emoji} ` : ''}{agentName}
+                    </SelectItem>
+                  )
+                })}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)} className="text-zinc-400">
@@ -483,6 +653,7 @@ export default function ProjectsPage() {
   const { data: paperclipIssues } = useIssues(companyId)
   const { data: localProjects } = useLocalData<Record<string, unknown>>('projects')
   const { data: localIssues } = useLocalData<Record<string, unknown>>('issues')
+  const { data: localAgents } = useLocalData<Record<string, unknown>>('agents')
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
   const [selectedSource, setSelectedSource] = useState<DataSource | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -501,11 +672,41 @@ export default function ProjectsPage() {
 
   const hasNoData = allProjects.length === 0
 
+  // Build agent map from local agents first, then Paperclip
+  const agentMap = useMemo(() => {
+    const map: Record<string, { name: string; emoji?: string | null }> = {}
+    if (localAgents) {
+      for (const a of localAgents) {
+        const id = String(a.id ?? '')
+        const name = String(a.name ?? '')
+        const role = String(a.role ?? '')
+        const emoji = extractEmoji(role)
+        map[id] = { name, emoji }
+      }
+    }
+    return map
+  }, [localAgents])
+
   // Task counts from both sources
   const taskCounts = useMemo(() => {
     const counts: Record<string, { total: number; done: number }> = {}
 
-    // Paperclip issues
+    // Local issues (always primary)
+    if (localIssues) {
+      for (const issue of localIssues) {
+        const projId = issue.project_id ? String(issue.project_id) : null
+        if (projId) {
+          if (!counts[projId]) counts[projId] = { total: 0, done: 0 }
+          counts[projId].total++
+          const s = String(issue.status ?? '').toLowerCase()
+          if (s === 'done' || s === 'completed' || s === 'closed') {
+            counts[projId].done++
+          }
+        }
+      }
+    }
+
+    // Paperclip issues (overlay)
     if (paperclipIssues) {
       for (const issue of paperclipIssues) {
         if (issue.projectId) {
@@ -514,21 +715,6 @@ export default function ProjectsPage() {
           const s = issue.status.toLowerCase()
           if (s === 'done' || s === 'completed' || s === 'closed') {
             counts[issue.projectId].done++
-          }
-        }
-      }
-    }
-
-    // Local issues
-    if (localIssues) {
-      for (const issue of localIssues) {
-        const projectId = issue.project_id ? String(issue.project_id) : null
-        if (projectId) {
-          if (!counts[projectId]) counts[projectId] = { total: 0, done: 0 }
-          counts[projectId].total++
-          const s = String(issue.status ?? '').toLowerCase()
-          if (s === 'done' || s === 'completed' || s === 'closed') {
-            counts[projectId].done++
           }
         }
       }
@@ -549,6 +735,8 @@ export default function ProjectsPage() {
           project={selectedProject}
           paperclipIssues={paperclipIssues ?? []}
           localIssues={localIssues ?? []}
+          localAgents={localAgents ?? []}
+          agentMap={agentMap}
           onBack={() => {
             setSelectedProjectId(null)
             setSelectedSource(null)
@@ -597,12 +785,14 @@ export default function ProjectsPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
           {allProjects.map((project) => {
             const counts = taskCounts[project.id] ?? { total: 0, done: 0 }
+            const ownerName = project.ownerId ? agentMap[project.ownerId]?.name : undefined
             return (
               <ProjectCard
                 key={`${project.source}-${project.id}`}
                 project={project}
                 taskCount={counts.total}
                 doneCount={counts.done}
+                ownerName={ownerName}
                 onClick={() => {
                   setSelectedProjectId(project.id)
                   setSelectedSource(project.source)
@@ -613,7 +803,11 @@ export default function ProjectsPage() {
         </div>
       )}
 
-      <NewProjectDialog open={dialogOpen} onOpenChange={setDialogOpen} />
+      <NewProjectDialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        localAgents={localAgents ?? []}
+      />
     </div>
   )
 }

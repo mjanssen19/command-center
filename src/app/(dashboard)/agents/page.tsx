@@ -14,6 +14,9 @@ import {
   CircleX,
   Loader2,
   Plus,
+  Pencil,
+  CheckSquare,
+  Calendar,
 } from 'lucide-react'
 import { PageHeader } from '@/components/common/PageHeader'
 import { EmptyState } from '@/components/common/EmptyState'
@@ -22,7 +25,7 @@ import { SourceBadge } from '@/components/common/SourceBadge'
 import { usePaperclip } from '@/lib/paperclip'
 import { useAgents, useAgentRuns } from '@/lib/paperclip/hooks'
 import { useLocalData } from '@/lib/hooks/useLocalData'
-import { useLocalCreate } from '@/lib/hooks/useLocalMutations'
+import { useLocalCreate, useLocalUpdate } from '@/lib/hooks/useLocalMutations'
 import { useMergedList } from '@/lib/hooks/useMergedData'
 import { cn } from '@/lib/utils/cn'
 import { Badge } from '@/components/ui/badge'
@@ -61,6 +64,28 @@ const RUN_STATUS_ICONS: Record<string, { icon: React.ElementType; color: string 
   cancelled: { icon: CircleX, color: 'text-zinc-500' },
 }
 
+const TASK_STATUS_COLORS: Record<string, string> = {
+  backlog: 'bg-zinc-700 text-zinc-300',
+  in_progress: 'bg-blue-900/50 text-blue-300',
+  review: 'bg-amber-900/50 text-amber-300',
+  done: 'bg-green-900/50 text-green-300',
+}
+
+const SCHEDULE_STATUS_COLORS: Record<string, string> = {
+  active: 'bg-green-900/50 text-green-300',
+  paused: 'bg-amber-900/50 text-amber-300',
+  error: 'bg-red-900/50 text-red-300',
+}
+
+// ── Helpers ──
+
+/** Extract emoji from beginning of a string if present */
+function extractEmoji(str: string): string | null {
+  const emojiRegex = /^(\p{Emoji_Presentation}|\p{Emoji}\uFE0F)/u
+  const match = str.match(emojiRegex)
+  return match ? match[0] : null
+}
+
 // ── Normalized display type ──
 
 interface NormalizedAgent {
@@ -76,6 +101,7 @@ interface NormalizedAgent {
   monthlySpend?: number
   monthlyBudget?: number
   currentTaskId?: string
+  agentSource?: string // 'scanner' | 'local' | etc.
   source: DataSource
   readonly: boolean
 }
@@ -114,6 +140,7 @@ function normalizeAgent(
     provider: data.provider ? String(data.provider) : undefined,
     adapterType: data.adapter_type ? String(data.adapter_type) : undefined,
     lastHeartbeat: data.last_heartbeat_at ? String(data.last_heartbeat_at) : undefined,
+    agentSource: data.source ? String(data.source) : 'local',
     source,
     readonly,
   }
@@ -138,6 +165,8 @@ function AgentCard({
   onClick: () => void
 }) {
   const statusCfg = STATUS_CONFIG[agent.status] ?? STATUS_CONFIG.offline
+  const emoji = extractEmoji(agent.role)
+  const isScanner = agent.agentSource === 'scanner'
 
   return (
     <button
@@ -149,6 +178,8 @@ function AgentCard({
         <div className="w-10 h-10 rounded-lg bg-zinc-800 flex items-center justify-center shrink-0">
           {agent.iconUrl ? (
             <Image src={agent.iconUrl} alt={agent.name} width={40} height={40} className="w-10 h-10 rounded-lg" />
+          ) : emoji ? (
+            <span className="text-lg">{emoji}</span>
           ) : (
             <span className="text-sm font-bold text-zinc-400">
               {agent.name.charAt(0).toUpperCase()}
@@ -159,7 +190,16 @@ function AgentCard({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-0.5">
             <h3 className="text-sm font-medium text-zinc-200 truncate">{agent.name}</h3>
-            <SourceBadge source={agent.source} />
+            {isScanner ? (
+              <Badge
+                variant="outline"
+                className="text-[9px] px-1 py-0 h-3.5 border bg-emerald-900/30 text-emerald-400 border-emerald-500/30"
+              >
+                OpenClaw
+              </Badge>
+            ) : (
+              <SourceBadge source={agent.source} />
+            )}
             <Badge
               variant="outline"
               className={cn('text-[10px] px-1.5 py-0 h-4 border', statusCfg.color)}
@@ -207,11 +247,19 @@ function AgentCard({
 function AgentDetail({
   agent,
   companyId,
+  localIssues,
+  localSchedules,
+  localProjects,
   onBack,
+  onEdit,
 }: {
   agent: NormalizedAgent
   companyId: string | undefined
+  localIssues: Record<string, unknown>[]
+  localSchedules: Record<string, unknown>[]
+  localProjects: Record<string, unknown>[]
   onBack: () => void
+  onEdit: () => void
 }) {
   // Only fetch runs for Paperclip agents
   const { data: runs } = useAgentRuns(
@@ -219,6 +267,43 @@ function AgentDetail({
     agent.source === 'paperclip' ? agent.id : undefined
   )
   const statusCfg = STATUS_CONFIG[agent.status] ?? STATUS_CONFIG.offline
+  const emoji = extractEmoji(agent.role)
+  const isScanner = agent.agentSource === 'scanner'
+  const isEditable = agent.source === 'local'
+
+  // Assigned tasks from local issues
+  const assignedTasks = useMemo(() => {
+    return localIssues
+      .filter((i) => String(i.assignee_agent_id ?? '') === agent.id)
+      .map((i) => ({
+        id: String(i.id ?? ''),
+        title: String(i.title ?? ''),
+        status: String(i.status ?? 'backlog'),
+        projectId: i.project_id ? String(i.project_id) : undefined,
+      }))
+  }, [localIssues, agent.id])
+
+  // Get project names
+  const projectMap = useMemo(() => {
+    const map: Record<string, string> = {}
+    for (const p of localProjects) {
+      map[String(p.id ?? '')] = String(p.name ?? '')
+    }
+    return map
+  }, [localProjects])
+
+  // Schedules linked to this agent
+  const agentSchedules = useMemo(() => {
+    return localSchedules
+      .filter((s) => String(s.linked_agent ?? '') === agent.id)
+      .map((s) => ({
+        id: String(s.id ?? ''),
+        name: String(s.name ?? ''),
+        cron: s.cron ? String(s.cron) : null,
+        status: String(s.status ?? 'active'),
+        lastRun: s.last_run ? String(s.last_run) : null,
+      }))
+  }, [localSchedules, agent.id])
 
   return (
     <div>
@@ -239,6 +324,8 @@ function AgentDetail({
           <div className="w-14 h-14 rounded-lg bg-zinc-800 flex items-center justify-center shrink-0">
             {agent.iconUrl ? (
               <Image src={agent.iconUrl} alt={agent.name} width={56} height={56} className="w-14 h-14 rounded-lg" />
+            ) : emoji ? (
+              <span className="text-2xl">{emoji}</span>
             ) : (
               <span className="text-xl font-bold text-zinc-400">
                 {agent.name.charAt(0).toUpperCase()}
@@ -248,13 +335,33 @@ function AgentDetail({
           <div className="flex-1">
             <div className="flex items-center gap-2 mb-1">
               <h2 className="text-lg font-semibold text-zinc-100">{agent.name}</h2>
-              <SourceBadge source={agent.source} />
+              {isScanner ? (
+                <Badge
+                  variant="outline"
+                  className="text-[9px] px-1 py-0 h-3.5 border bg-emerald-900/30 text-emerald-400 border-emerald-500/30"
+                >
+                  OpenClaw
+                </Badge>
+              ) : (
+                <SourceBadge source={agent.source} />
+              )}
               <Badge
                 variant="outline"
                 className={cn('text-xs px-2 py-0.5 border', statusCfg.color)}
               >
                 {statusCfg.label}
               </Badge>
+              {isEditable && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={onEdit}
+                  className="text-zinc-500 hover:text-zinc-300 h-6 px-2 ml-auto"
+                >
+                  <Pencil className="w-3 h-3 mr-1" />
+                  <span className="text-xs">Edit</span>
+                </Button>
+              )}
             </div>
             <p className="text-sm text-zinc-400 mb-3">{agent.role}</p>
 
@@ -295,6 +402,83 @@ function AgentDetail({
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Assigned Tasks */}
+      <div className="bg-zinc-900 border border-zinc-800 rounded-lg mb-4">
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-zinc-800">
+          <CheckSquare className="w-3.5 h-3.5 text-zinc-500" />
+          <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
+            Assigned Tasks ({assignedTasks.length})
+          </h3>
+        </div>
+        {assignedTasks.length === 0 ? (
+          <div className="p-4 text-center">
+            <p className="text-xs text-zinc-600">No tasks assigned to this agent.</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-zinc-800">
+            {assignedTasks.map((task) => (
+              <div key={task.id} className="px-4 py-2.5 flex items-center gap-3">
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs text-zinc-300 truncate">{task.title}</p>
+                  {task.projectId && projectMap[task.projectId] && (
+                    <p className="text-[10px] text-zinc-600">{projectMap[task.projectId]}</p>
+                  )}
+                </div>
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    'text-[10px] px-1.5 py-0 h-4',
+                    TASK_STATUS_COLORS[task.status] ?? 'bg-zinc-700 text-zinc-300'
+                  )}
+                >
+                  {task.status.replace(/_/g, ' ')}
+                </Badge>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Schedules */}
+      <div className="bg-zinc-900 border border-zinc-800 rounded-lg mb-4">
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-zinc-800">
+          <Calendar className="w-3.5 h-3.5 text-zinc-500" />
+          <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
+            Schedules ({agentSchedules.length})
+          </h3>
+        </div>
+        {agentSchedules.length === 0 ? (
+          <div className="p-4 text-center">
+            <p className="text-xs text-zinc-600">No schedules linked to this agent.</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-zinc-800">
+            {agentSchedules.map((schedule) => (
+              <div key={schedule.id} className="px-4 py-2.5 flex items-center gap-3">
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs text-zinc-300 truncate">{schedule.name}</p>
+                  {schedule.cron && (
+                    <p className="text-[10px] text-zinc-600 font-mono">{schedule.cron}</p>
+                  )}
+                  {schedule.lastRun && (
+                    <p className="text-[10px] text-zinc-600">Last run: {relativeTime(schedule.lastRun)}</p>
+                  )}
+                </div>
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    'text-[10px] px-1.5 py-0 h-4',
+                    SCHEDULE_STATUS_COLORS[schedule.status] ?? 'bg-zinc-700 text-zinc-300'
+                  )}
+                >
+                  {schedule.status}
+                </Badge>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Recent runs (Paperclip agents only) */}
@@ -344,18 +528,6 @@ function AgentDetail({
               })}
             </div>
           )}
-        </div>
-      )}
-
-      {/* Local agent info */}
-      {agent.source === 'local' && (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
-          <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2">
-            Local Agent
-          </h3>
-          <p className="text-xs text-zinc-500">
-            This agent is registered locally. Runs and heartbeat data are not available for local agents.
-          </p>
         </div>
       )}
     </div>
@@ -485,13 +657,136 @@ function RegisterAgentDialog({
   )
 }
 
+// ── Edit Agent Dialog ──
+
+function EditAgentDialog({
+  open,
+  onOpenChange,
+  agent,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  agent: NormalizedAgent
+}) {
+  const [name, setName] = useState(agent.name)
+  const [role, setRole] = useState(agent.role)
+  const [model, setModel] = useState(agent.model ?? '')
+  const [provider, setProvider] = useState(agent.provider ?? '')
+  const [status, setStatus] = useState(agent.status)
+  const updateAgent = useLocalUpdate('agents')
+
+  const handleSubmit = () => {
+    if (!name.trim()) return
+    updateAgent.mutate(
+      {
+        id: agent.id,
+        name: name.trim(),
+        role: role.trim() || 'assistant',
+        model: model.trim() || '',
+        provider: provider.trim() || '',
+        status,
+      },
+      {
+        onSuccess: () => {
+          onOpenChange(false)
+        },
+      }
+    )
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="bg-zinc-900 border-zinc-800 max-w-md">
+        <DialogHeader>
+          <DialogTitle className="text-zinc-100">Edit Agent</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-zinc-400 mb-1 block">Name</label>
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Agent name..."
+              className="bg-zinc-800 border-zinc-700 text-zinc-200"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-zinc-400 mb-1 block">Role</label>
+            <Input
+              value={role}
+              onChange={(e) => setRole(e.target.value)}
+              placeholder="e.g. code-reviewer, writer, researcher..."
+              className="bg-zinc-800 border-zinc-700 text-zinc-200"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-zinc-400 mb-1 block">Provider</label>
+              <Input
+                value={provider}
+                onChange={(e) => setProvider(e.target.value)}
+                placeholder="e.g. anthropic, openai..."
+                className="bg-zinc-800 border-zinc-700 text-zinc-200"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-zinc-400 mb-1 block">Model</label>
+              <Input
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                placeholder="e.g. claude-3.5-sonnet..."
+                className="bg-zinc-800 border-zinc-700 text-zinc-200"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="text-xs text-zinc-400 mb-1 block">Status</label>
+            <Select value={status} onValueChange={(v) => v && setStatus(v)}>
+              <SelectTrigger className="bg-zinc-800 border-zinc-700 text-zinc-200">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="bg-zinc-800 border-zinc-700">
+                <SelectItem value="active">Active</SelectItem>
+                <SelectItem value="idle">Idle</SelectItem>
+                <SelectItem value="offline">Offline</SelectItem>
+                <SelectItem value="error">Error</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)} className="text-zinc-400">
+            Cancel
+          </Button>
+          <Button
+            onClick={handleSubmit}
+            disabled={!name.trim() || updateAgent.isPending}
+            className="bg-indigo-600 hover:bg-indigo-500 text-white"
+          >
+            {updateAgent.isPending ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />
+            ) : (
+              <Pencil className="w-3.5 h-3.5 mr-1" />
+            )}
+            Save
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 export default function AgentsPage() {
   const { companyId, status: paperclipStatus } = usePaperclip()
   const { data: paperclipAgents } = useAgents(companyId)
   const { data: localAgents } = useLocalData<Record<string, unknown>>('agents')
+  const { data: localIssues } = useLocalData<Record<string, unknown>>('issues')
+  const { data: localSchedules } = useLocalData<Record<string, unknown>>('schedule_jobs')
+  const { data: localProjects } = useLocalData<Record<string, unknown>>('projects')
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
   const [selectedSource, setSelectedSource] = useState<DataSource | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [editDialogOpen, setEditDialogOpen] = useState(false)
 
   const paperclipConnected = paperclipStatus === 'connected'
 
@@ -518,11 +813,22 @@ export default function AgentsPage() {
         <AgentDetail
           agent={selectedAgent}
           companyId={companyId}
+          localIssues={localIssues ?? []}
+          localSchedules={localSchedules ?? []}
+          localProjects={localProjects ?? []}
           onBack={() => {
             setSelectedAgentId(null)
             setSelectedSource(null)
           }}
+          onEdit={() => setEditDialogOpen(true)}
         />
+        {editDialogOpen && selectedAgent.source === 'local' && (
+          <EditAgentDialog
+            open={editDialogOpen}
+            onOpenChange={setEditDialogOpen}
+            agent={selectedAgent}
+          />
+        )}
       </div>
     )
   }
