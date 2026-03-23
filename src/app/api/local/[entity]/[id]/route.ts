@@ -14,6 +14,7 @@ const ALLOWED_ENTITIES = [
   'agents',
   'projects',
   'approvals',
+  'council_proposals',
 ]
 
 export async function GET(

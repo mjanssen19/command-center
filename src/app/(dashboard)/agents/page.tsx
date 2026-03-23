@@ -22,6 +22,7 @@ import { PageHeader } from '@/components/common/PageHeader'
 import { EmptyState } from '@/components/common/EmptyState'
 import { PaperclipOfflineBanner } from '@/components/common/PaperclipOfflineBanner'
 import { SourceBadge } from '@/components/common/SourceBadge'
+import { EntityLink } from '@/components/common/EntityLink'
 import { usePaperclip } from '@/lib/paperclip'
 import { useAgents, useAgentRuns } from '@/lib/paperclip/hooks'
 import { useLocalData } from '@/lib/hooks/useLocalData'
@@ -421,10 +422,12 @@ function AgentDetail({
             {assignedTasks.map((task) => (
               <div key={task.id} className="px-4 py-2.5 flex items-center gap-3">
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs text-zinc-300 truncate">{task.title}</p>
-                  {task.projectId && projectMap[task.projectId] && (
-                    <p className="text-[10px] text-zinc-600">{projectMap[task.projectId]}</p>
-                  )}
+                  <div className="flex items-center gap-2">
+                    <EntityLink type="issue" id={task.id} label={task.title} />
+                    {task.projectId && projectMap[task.projectId] && (
+                      <EntityLink type="project" id={task.projectId} label={projectMap[task.projectId]} />
+                    )}
+                  </div>
                 </div>
                 <Badge
                   variant="outline"
@@ -458,7 +461,9 @@ function AgentDetail({
             {agentSchedules.map((schedule) => (
               <div key={schedule.id} className="px-4 py-2.5 flex items-center gap-3">
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs text-zinc-300 truncate">{schedule.name}</p>
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <EntityLink type="schedule" id={schedule.id} label={schedule.name} />
+                  </div>
                   {schedule.cron && (
                     <p className="text-[10px] text-zinc-600 font-mono">{schedule.cron}</p>
                   )}

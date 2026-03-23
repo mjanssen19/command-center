@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, Suspense } from 'react'
+import { useSearchParams } from 'next/navigation'
 import {
   Clock,
   Plus,
@@ -9,6 +10,7 @@ import {
 } from 'lucide-react'
 import { PageHeader } from '@/components/common/PageHeader'
 import { EmptyState } from '@/components/common/EmptyState'
+import { EntityLink } from '@/components/common/EntityLink'
 import { cn } from '@/lib/utils/cn'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -20,12 +22,28 @@ import {
   DialogTitle,
   DialogFooter,
 } from '@/components/ui/dialog'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { useLocalData } from '@/lib/hooks/useLocalData'
+import { useLocalCreate } from '@/lib/hooks/useLocalMutations'
 import type { ScheduleJob } from '@/lib/entities/types'
 
 const STATUS_CONFIG: Record<string, { color: string; label: string }> = {
   active: { color: 'bg-green-500/10 text-green-400 border-green-500/20', label: 'Active' },
   paused: { color: 'bg-amber-500/10 text-amber-400 border-amber-500/20', label: 'Paused' },
   error: { color: 'bg-red-500/10 text-red-400 border-red-500/20', label: 'Error' },
+}
+
+/** Extract emoji from beginning of a string if present */
+function extractEmoji(str: string): string | null {
+  const emojiRegex = /^(\p{Emoji_Presentation}|\p{Emoji}\uFE0F)/u
+  const match = str.match(emojiRegex)
+  return match ? match[0] : null
 }
 
 function humanizeCron(cron: string | null): string {
@@ -35,7 +53,6 @@ function humanizeCron(cron: string | null): string {
 
   const [min, hour, dom, mon, dow] = parts
 
-  // Common patterns
   if (min === '0' && hour === '*' && dom === '*' && mon === '*' && dow === '*') return 'Every hour'
   if (min !== '*' && hour === '*' && dom === '*' && mon === '*' && dow === '*')
     return `Every hour at :${min.padStart(2, '0')}`
@@ -98,7 +115,6 @@ function getJobDayHours(cron: string | null): Array<{ day: number; hour: number 
     for (let i = 0; i < 5; i++) days.push(i)
   } else {
     const d = parseInt(dow)
-    // Convert cron day (0=Sun) to our array (0=Mon)
     days.push(d === 0 ? 6 : d - 1)
   }
 
@@ -182,43 +198,45 @@ function WeeklyGrid({ jobs }: { jobs: ScheduleJob[] }) {
 function NewScheduleDialog({
   open,
   onOpenChange,
-  onCreated,
+  agents,
+  tasks,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
-  onCreated: () => void
+  agents: Record<string, unknown>[]
+  tasks: Record<string, unknown>[]
 }) {
   const [name, setName] = useState('')
   const [cron, setCron] = useState('')
   const [description, setDescription] = useState('')
-  const [saving, setSaving] = useState(false)
+  const [linkedAgent, setLinkedAgent] = useState('')
+  const [linkedTask, setLinkedTask] = useState('')
+  const createSchedule = useLocalCreate<Record<string, unknown>>('schedule_jobs')
 
-  const handleSubmit = async () => {
+  const handleSubmit = () => {
     if (!name.trim()) return
-    setSaving(true)
-    try {
-      const res = await fetch('/api/local/schedule_jobs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: name.trim(),
-          cron: cron.trim() || null,
-          description: description.trim(),
-          status: 'active',
-          nextRun: null,
-          lastRun: null,
-        }),
-      })
-      if (res.ok) {
+    const data: Record<string, unknown> = {
+      name: name.trim(),
+      cron: cron.trim() || null,
+      description: description.trim(),
+      status: 'active',
+      nextRun: null,
+      lastRun: null,
+      createdAt: new Date().toISOString(),
+    }
+    if (linkedAgent) data.linkedAgent = linkedAgent
+    if (linkedTask) data.linkedTask = linkedTask
+
+    createSchedule.mutate(data, {
+      onSuccess: () => {
         setName('')
         setCron('')
         setDescription('')
+        setLinkedAgent('')
+        setLinkedTask('')
         onOpenChange(false)
-        onCreated()
-      }
-    } finally {
-      setSaving(false)
-    }
+      },
+    })
   }
 
   return (
@@ -258,6 +276,48 @@ function NewScheduleDialog({
               className="bg-zinc-800 border-zinc-700 text-zinc-200"
             />
           </div>
+          <div>
+            <label className="text-xs text-zinc-400 mb-1 block">Linked Agent</label>
+            <Select value={linkedAgent} onValueChange={(v) => v !== null && setLinkedAgent(v)}>
+              <SelectTrigger className="bg-zinc-800 border-zinc-700 text-zinc-200">
+                <SelectValue placeholder="No agent" />
+              </SelectTrigger>
+              <SelectContent className="bg-zinc-800 border-zinc-700">
+                <SelectItem value="">None</SelectItem>
+                {agents.map((agent) => {
+                  const id = String(agent.id ?? '')
+                  const agentName = String(agent.name ?? '')
+                  const role = String(agent.role ?? '')
+                  const emoji = extractEmoji(role)
+                  return (
+                    <SelectItem key={id} value={id}>
+                      {emoji ? `${emoji} ` : ''}{agentName}
+                    </SelectItem>
+                  )
+                })}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <label className="text-xs text-zinc-400 mb-1 block">Linked Task</label>
+            <Select value={linkedTask} onValueChange={(v) => v !== null && setLinkedTask(v)}>
+              <SelectTrigger className="bg-zinc-800 border-zinc-700 text-zinc-200">
+                <SelectValue placeholder="No task" />
+              </SelectTrigger>
+              <SelectContent className="bg-zinc-800 border-zinc-700">
+                <SelectItem value="">None</SelectItem>
+                {tasks.map((task) => {
+                  const id = String(task.id ?? '')
+                  const title = String(task.title ?? '')
+                  return (
+                    <SelectItem key={id} value={id}>
+                      {title}
+                    </SelectItem>
+                  )
+                })}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)} className="text-zinc-400">
@@ -265,10 +325,10 @@ function NewScheduleDialog({
           </Button>
           <Button
             onClick={handleSubmit}
-            disabled={!name.trim() || saving}
+            disabled={!name.trim() || createSchedule.isPending}
             className="bg-indigo-600 hover:bg-indigo-500 text-white"
           >
-            {saving ? (
+            {createSchedule.isPending ? (
               <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />
             ) : (
               <Plus className="w-3.5 h-3.5 mr-1" />
@@ -282,27 +342,57 @@ function NewScheduleDialog({
 }
 
 export default function SchedulingPage() {
-  const [jobs, setJobs] = useState<ScheduleJob[]>([])
-  const [loading, setLoading] = useState(true)
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center h-full text-zinc-500">Loading...</div>}>
+      <SchedulingPageContent />
+    </Suspense>
+  )
+}
+
+function SchedulingPageContent() {
+  const searchParams = useSearchParams()
+  const selectedParam = searchParams.get('selected')
+
+  const { data: rawJobs, isLoading: loading } = useLocalData<Record<string, unknown>>('schedule_jobs')
+  const { data: localAgents } = useLocalData<Record<string, unknown>>('agents')
+  const { data: localTasks } = useLocalData<Record<string, unknown>>('issues')
   const [dialogOpen, setDialogOpen] = useState(false)
 
-  const fetchJobs = useCallback(async () => {
-    try {
-      const res = await fetch('/api/local/schedule_jobs')
-      if (res.ok) {
-        const data = await res.json()
-        setJobs(data.items ?? [])
-      }
-    } catch {
-      // silent fail
-    } finally {
-      setLoading(false)
+  // Build agent name map
+  const agentMap: Record<string, { name: string; emoji: string | null }> = {}
+  if (localAgents) {
+    for (const a of localAgents) {
+      const id = String(a.id ?? '')
+      const name = String(a.name ?? '')
+      const role = String(a.role ?? '')
+      agentMap[id] = { name, emoji: extractEmoji(role) }
     }
-  }, [])
+  }
 
-  useEffect(() => {
-    fetchJobs()
-  }, [fetchJobs])
+  // Build task name map
+  const taskMap: Record<string, string> = {}
+  if (localTasks) {
+    for (const t of localTasks) {
+      taskMap[String(t.id ?? '')] = String(t.title ?? '')
+    }
+  }
+
+  // Normalize jobs to ScheduleJob type
+  const jobs: ScheduleJob[] = (rawJobs ?? []).map((j) => ({
+    id: String(j.id ?? ''),
+    name: String(j.name ?? ''),
+    cron: j.cron ? String(j.cron) : null,
+    nextRun: j.next_run ? String(j.next_run) : null,
+    lastRun: j.last_run ? String(j.last_run) : null,
+    status: (String(j.status ?? 'active')) as ScheduleJob['status'],
+    linkedProject: j.linked_project ? String(j.linked_project) : undefined,
+    linkedAgent: j.linked_agent ? String(j.linked_agent) : undefined,
+    description: String(j.description ?? ''),
+    createdAt: String(j.created_at ?? new Date().toISOString()),
+  }))
+
+  // If selectedParam, highlight that job
+  const _selectedId = selectedParam
 
   return (
     <div>
@@ -355,16 +445,43 @@ export default function SchedulingPage() {
             <div className="divide-y divide-zinc-800">
               {jobs.map((job) => {
                 const statusCfg = STATUS_CONFIG[job.status] ?? STATUS_CONFIG.paused
+                const isSelected = _selectedId === job.id
+                const agentInfo = job.linkedAgent ? agentMap[job.linkedAgent] : undefined
+                const linkedTaskRaw = (rawJobs ?? []).find((j) => String(j.id ?? '') === job.id)
+                const linkedTaskId = linkedTaskRaw?.linked_task ? String(linkedTaskRaw.linked_task) : undefined
+                const linkedTaskName = linkedTaskId ? taskMap[linkedTaskId] : undefined
+
                 return (
                   <div
                     key={job.id}
-                    className="grid grid-cols-[1fr_160px_120px_120px_80px] gap-2 px-4 py-3 items-center hover:bg-zinc-800/30 transition-colors"
+                    className={cn(
+                      'grid grid-cols-[1fr_160px_120px_120px_80px] gap-2 px-4 py-3 items-center hover:bg-zinc-800/30 transition-colors',
+                      isSelected && 'bg-zinc-800/40 border-l-2 border-l-indigo-500'
+                    )}
                   >
                     <div className="min-w-0">
                       <p className="text-sm text-zinc-200 truncate">{job.name}</p>
                       {job.description && (
                         <p className="text-[10px] text-zinc-600 truncate">{job.description}</p>
                       )}
+                      {/* EntityLink chips for linked agent and task */}
+                      <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                        {agentInfo && job.linkedAgent && (
+                          <EntityLink
+                            type="agent"
+                            id={job.linkedAgent}
+                            label={agentInfo.name}
+                            emoji={agentInfo.emoji}
+                          />
+                        )}
+                        {linkedTaskId && linkedTaskName && (
+                          <EntityLink
+                            type="issue"
+                            id={linkedTaskId}
+                            label={linkedTaskName}
+                          />
+                        )}
+                      </div>
                     </div>
                     <div className="text-xs text-zinc-400 font-mono">
                       {humanizeCron(job.cron)}
@@ -393,7 +510,8 @@ export default function SchedulingPage() {
       <NewScheduleDialog
         open={dialogOpen}
         onOpenChange={setDialogOpen}
-        onCreated={fetchJobs}
+        agents={localAgents ?? []}
+        tasks={localTasks ?? []}
       />
     </div>
   )

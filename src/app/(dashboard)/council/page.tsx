@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, Suspense } from 'react'
+import { useSearchParams } from 'next/navigation'
 import {
   Plus,
   Users,
@@ -9,9 +10,12 @@ import {
   Clock,
   CheckCircle2,
   MessageSquare,
+  FolderPlus,
+  Loader2,
 } from 'lucide-react'
 import { PageHeader } from '@/components/common/PageHeader'
 import { EmptyState } from '@/components/common/EmptyState'
+import { EntityLink } from '@/components/common/EntityLink'
 import { cn } from '@/lib/utils/cn'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -24,26 +28,8 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
-
-// ── Types ──
-
-interface DebateEntry {
-  id: string
-  agentName: string
-  position: 'for' | 'against' | 'neutral'
-  argument: string
-  timestamp: string
-}
-
-interface Proposal {
-  id: string
-  title: string
-  description: string
-  status: 'open' | 'resolved'
-  recommendation?: string
-  debateEntries: DebateEntry[]
-  createdAt: string
-}
+import { useLocalData } from '@/lib/hooks/useLocalData'
+import { useLocalCreate, useLocalUpdate } from '@/lib/hooks/useLocalMutations'
 
 // ── Helpers ──
 
@@ -57,30 +43,6 @@ function relativeTime(dateStr: string): string {
   return `${Math.floor(diff / 86_400_000)}d ago`
 }
 
-function generateId(): string {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
-}
-
-// ── localStorage Helpers ──
-
-function loadProposals(): Proposal[] {
-  try {
-    const raw = localStorage.getItem('council_proposals')
-    if (raw) return JSON.parse(raw)
-  } catch {
-    // ignore
-  }
-  return []
-}
-
-function saveProposals(proposals: Proposal[]) {
-  try {
-    localStorage.setItem('council_proposals', JSON.stringify(proposals))
-  } catch {
-    // ignore
-  }
-}
-
 // ── Position Badge ──
 
 const POSITION_COLORS: Record<string, string> = {
@@ -89,20 +51,81 @@ const POSITION_COLORS: Record<string, string> = {
   neutral: 'bg-zinc-700 text-zinc-300',
 }
 
+// ── Normalized types ──
+
+interface NormalizedProposal {
+  id: string
+  title: string
+  description: string
+  status: string
+  recommendation: string
+  createdAt: string
+  resolvedAt?: string
+}
+
+interface DebateEntry {
+  id: string
+  agentName: string
+  position: string
+  argument: string
+  timestamp: string
+}
+
+function normalizeProposal(data: Record<string, unknown>): NormalizedProposal {
+  return {
+    id: String(data.id ?? ''),
+    title: String(data.title ?? ''),
+    description: String(data.description ?? ''),
+    status: String(data.status ?? 'open'),
+    recommendation: String(data.recommendation ?? ''),
+    createdAt: String(data.created_at ?? new Date().toISOString()),
+    resolvedAt: data.resolved_at ? String(data.resolved_at) : undefined,
+  }
+}
+
+function normalizeDebateEntry(data: Record<string, unknown>): DebateEntry {
+  // Debate entries stored as activity_events with JSON summary
+  const summaryStr = String(data.summary ?? '{}')
+  let parsed: Record<string, unknown> = {}
+  try {
+    parsed = JSON.parse(summaryStr)
+  } catch {
+    // fallback: treat summary as the argument itself
+    parsed = { argument: summaryStr }
+  }
+  return {
+    id: String(data.id ?? ''),
+    agentName: String(parsed.agentName ?? data.agent_id ?? 'Unknown'),
+    position: String(parsed.position ?? 'neutral'),
+    argument: String(parsed.argument ?? ''),
+    timestamp: String(data.timestamp ?? new Date().toISOString()),
+  }
+}
+
 // ── Proposal Card ──
 
 function ProposalCard({
   proposal,
+  debateEntries,
   isExpanded,
   onToggle,
   onAddDebate,
   onResolve,
+  linkedProjectId,
+  linkedProjectName,
+  onCreateProject,
+  isCreatingProject,
 }: {
-  proposal: Proposal
+  proposal: NormalizedProposal
+  debateEntries: DebateEntry[]
   isExpanded: boolean
   onToggle: () => void
-  onAddDebate: (proposalId: string, entry: Omit<DebateEntry, 'id' | 'timestamp'>) => void
+  onAddDebate: (proposalId: string, entry: { agentName: string; position: string; argument: string }) => void
   onResolve: (proposalId: string, recommendation: string) => void
+  linkedProjectId?: string
+  linkedProjectName?: string
+  onCreateProject: (proposalId: string) => void
+  isCreatingProject: boolean
 }) {
   const [showDebateForm, setShowDebateForm] = useState(false)
   const [agentName, setAgentName] = useState('')
@@ -165,12 +188,19 @@ function ProposalCard({
             </span>
             <span className="text-[10px] text-zinc-600 flex items-center gap-1">
               <MessageSquare className="w-3 h-3" />
-              {proposal.debateEntries.length} arguments
+              {debateEntries.length} arguments
             </span>
             <span className="text-[10px] text-zinc-600 flex items-center gap-1">
               <Users className="w-3 h-3" />
-              {new Set(proposal.debateEntries.map((e) => e.agentName)).size} participants
+              {new Set(debateEntries.map((e) => e.agentName)).size} participants
             </span>
+            {linkedProjectId && linkedProjectName && (
+              <EntityLink
+                type="project"
+                id={linkedProjectId}
+                label={linkedProjectName}
+              />
+            )}
           </div>
         </div>
       </div>
@@ -194,21 +224,52 @@ function ProposalCard({
                 Recommendation
               </p>
               <p className="text-xs text-zinc-300 leading-relaxed">{proposal.recommendation}</p>
+
+              {/* Create Project from Proposal button */}
+              <div className="mt-3 flex items-center gap-2">
+                {linkedProjectId && linkedProjectName ? (
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-zinc-500">Project created:</span>
+                    <EntityLink
+                      type="project"
+                      id={linkedProjectId}
+                      label={linkedProjectName}
+                    />
+                  </div>
+                ) : (
+                  <Button
+                    size="sm"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onCreateProject(proposal.id)
+                    }}
+                    disabled={isCreatingProject}
+                    className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs h-7"
+                  >
+                    {isCreatingProject ? (
+                      <Loader2 className="w-3 h-3 animate-spin mr-1" />
+                    ) : (
+                      <FolderPlus className="w-3 h-3 mr-1" />
+                    )}
+                    Create Project from Proposal
+                  </Button>
+                )}
+              </div>
             </div>
           )}
 
           {/* Debate entries */}
           <div className="px-4 py-3">
             <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2">
-              Debate ({proposal.debateEntries.length})
+              Debate ({debateEntries.length})
             </p>
-            {proposal.debateEntries.length === 0 ? (
+            {debateEntries.length === 0 ? (
               <p className="text-xs text-zinc-600 text-center py-3">
                 No arguments yet. Add the first one.
               </p>
             ) : (
               <div className="space-y-2">
-                {proposal.debateEntries.map((entry) => (
+                {debateEntries.map((entry) => (
                   <div
                     key={entry.id}
                     className="flex items-start gap-2 p-2 bg-zinc-800/50 rounded-md"
@@ -226,7 +287,7 @@ function ProposalCard({
                         <span
                           className={cn(
                             'text-[9px] font-medium px-1.5 py-0 rounded',
-                            POSITION_COLORS[entry.position]
+                            POSITION_COLORS[entry.position] ?? POSITION_COLORS.neutral
                           )}
                         >
                           {entry.position}
@@ -360,21 +421,32 @@ function ProposalCard({
 function NewProposalDialog({
   open,
   onOpenChange,
-  onSubmit,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
-  onSubmit: (title: string, description: string) => void
 }) {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
+  const createProposal = useLocalCreate<Record<string, unknown>>('council_proposals')
 
   const handleSubmit = () => {
     if (!title.trim() || !description.trim()) return
-    onSubmit(title.trim(), description.trim())
-    setTitle('')
-    setDescription('')
-    onOpenChange(false)
+    createProposal.mutate(
+      {
+        title: title.trim(),
+        description: description.trim(),
+        status: 'open',
+        recommendation: '',
+        createdAt: new Date().toISOString(),
+      },
+      {
+        onSuccess: () => {
+          setTitle('')
+          setDescription('')
+          onOpenChange(false)
+        },
+      }
+    )
   }
 
   return (
@@ -409,10 +481,14 @@ function NewProposalDialog({
           </Button>
           <Button
             onClick={handleSubmit}
-            disabled={!title.trim() || !description.trim()}
+            disabled={!title.trim() || !description.trim() || createProposal.isPending}
             className="bg-indigo-600 hover:bg-indigo-500 text-white"
           >
-            <Plus className="w-3.5 h-3.5 mr-1" />
+            {createProposal.isPending ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />
+            ) : (
+              <Plus className="w-3.5 h-3.5 mr-1" />
+            )}
             Create
           </Button>
         </DialogFooter>
@@ -424,72 +500,166 @@ function NewProposalDialog({
 // ── Main Page ──
 
 export default function CouncilPage() {
-  const [proposals, setProposals] = useState<Proposal[]>(() => {
-    if (typeof window === 'undefined') return []
-    return loadProposals()
-  })
-  const [expandedId, setExpandedId] = useState<string | null>(null)
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center h-full text-zinc-500">Loading...</div>}>
+      <CouncilPageContent />
+    </Suspense>
+  )
+}
+
+function CouncilPageContent() {
+  const searchParams = useSearchParams()
+  const selectedParam = searchParams.get('selected')
+
+  const { data: proposals } = useLocalData<Record<string, unknown>>('council_proposals')
+  const { data: activityEvents } = useLocalData<Record<string, unknown>>('activity_events')
+  const { data: entityLinks } = useLocalData<Record<string, unknown>>('entity_links')
+  const { data: projects } = useLocalData<Record<string, unknown>>('projects')
+
+  const createActivity = useLocalCreate<Record<string, unknown>>('activity_events')
+  const createEntityLink = useLocalCreate<Record<string, unknown>>('entity_links')
+  const createProject = useLocalCreate<Record<string, unknown>>('projects')
+  const updateProposal = useLocalUpdate('council_proposals')
+
+  const [expandedId, setExpandedId] = useState<string | null>(selectedParam)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [filterStatus, setFilterStatus] = useState<'all' | 'open' | 'resolved'>('all')
-  const mounted = typeof window !== 'undefined'
+  const [creatingProjectFor, setCreatingProjectFor] = useState<string | null>(null)
 
-  const persist = useCallback((updated: Proposal[]) => {
-    setProposals(updated)
-    saveProposals(updated)
-  }, [])
+  // Normalize proposals
+  const allProposals = useMemo(() => {
+    if (!proposals) return []
+    return proposals.map(normalizeProposal)
+  }, [proposals])
 
-  const handleNewProposal = useCallback(
-    (title: string, description: string) => {
-      const newProposal: Proposal = {
-        id: generateId(),
-        title,
-        description,
-        status: 'open',
-        debateEntries: [],
-        createdAt: new Date().toISOString(),
+  // Build debate entries per proposal from activity_events
+  const debateEntriesByProposal = useMemo(() => {
+    const map: Record<string, DebateEntry[]> = {}
+    if (activityEvents) {
+      for (const ev of activityEvents) {
+        if (String(ev.entity_type ?? '') === 'council_proposal' && String(ev.type ?? '') === 'debate_entry') {
+          const proposalId = String(ev.entity_id ?? '')
+          if (!map[proposalId]) map[proposalId] = []
+          map[proposalId].push(normalizeDebateEntry(ev))
+        }
       }
-      persist([newProposal, ...proposals])
-    },
-    [proposals, persist]
-  )
+    }
+    // Sort by timestamp
+    for (const key of Object.keys(map)) {
+      map[key].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+    }
+    return map
+  }, [activityEvents])
+
+  // Build linked project map from entity_links
+  const linkedProjectMap = useMemo(() => {
+    const map: Record<string, { projectId: string; projectName: string }> = {}
+    if (entityLinks && projects) {
+      const projectNameMap: Record<string, string> = {}
+      for (const p of projects) {
+        projectNameMap[String(p.id ?? '')] = String(p.name ?? '')
+      }
+      for (const link of entityLinks) {
+        if (
+          String(link.from_type ?? '') === 'council_proposal' &&
+          String(link.to_type ?? '') === 'project'
+        ) {
+          const proposalId = String(link.from_id ?? '')
+          const projectId = String(link.to_id ?? '')
+          map[proposalId] = {
+            projectId,
+            projectName: projectNameMap[projectId] ?? projectId.slice(0, 8),
+          }
+        }
+      }
+    }
+    return map
+  }, [entityLinks, projects])
 
   const handleAddDebate = useCallback(
-    (proposalId: string, entry: Omit<DebateEntry, 'id' | 'timestamp'>) => {
-      const updated = proposals.map((p) => {
-        if (p.id !== proposalId) return p
-        return {
-          ...p,
-          debateEntries: [
-            ...p.debateEntries,
-            { ...entry, id: generateId(), timestamp: new Date().toISOString() },
-          ],
-        }
+    (proposalId: string, entry: { agentName: string; position: string; argument: string }) => {
+      createActivity.mutate({
+        type: 'debate_entry',
+        entityType: 'council_proposal',
+        entityId: proposalId,
+        summary: JSON.stringify(entry),
+        timestamp: new Date().toISOString(),
       })
-      persist(updated)
     },
-    [proposals, persist]
+    [createActivity]
   )
 
   const handleResolve = useCallback(
     (proposalId: string, recommendation: string) => {
-      const updated = proposals.map((p) => {
-        if (p.id !== proposalId) return p
-        return { ...p, status: 'resolved' as const, recommendation }
+      updateProposal.mutate({
+        id: proposalId,
+        status: 'resolved',
+        recommendation,
+        resolved_at: new Date().toISOString(),
       })
-      persist(updated)
+      createActivity.mutate({
+        type: 'proposal_resolved',
+        entityType: 'council_proposal',
+        entityId: proposalId,
+        summary: `Proposal resolved with recommendation: ${recommendation.slice(0, 100)}`,
+        timestamp: new Date().toISOString(),
+      })
     },
-    [proposals, persist]
+    [updateProposal, createActivity]
+  )
+
+  const handleCreateProject = useCallback(
+    (proposalId: string) => {
+      const proposal = allProposals.find((p) => p.id === proposalId)
+      if (!proposal) return
+      setCreatingProjectFor(proposalId)
+
+      createProject.mutate(
+        {
+          name: proposal.title,
+          description: proposal.description,
+          status: 'planning',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        {
+          onSuccess: (data) => {
+            const newProjectId = data.id
+            // Create entity link
+            createEntityLink.mutate({
+              fromType: 'council_proposal',
+              fromId: proposalId,
+              toType: 'project',
+              toId: newProjectId,
+              relationship: 'created_from',
+              confidence: 1.0,
+            })
+            // Log activity
+            createActivity.mutate({
+              type: 'project_created_from_proposal',
+              entityType: 'council_proposal',
+              entityId: proposalId,
+              summary: `Project '${proposal.title}' created from council proposal`,
+              timestamp: new Date().toISOString(),
+            })
+            setCreatingProjectFor(null)
+          },
+          onError: () => {
+            setCreatingProjectFor(null)
+          },
+        }
+      )
+    },
+    [allProposals, createProject, createEntityLink, createActivity]
   )
 
   const filteredProposals = useMemo(() => {
-    if (filterStatus === 'all') return proposals
-    return proposals.filter((p) => p.status === filterStatus)
-  }, [proposals, filterStatus])
+    if (filterStatus === 'all') return allProposals
+    return allProposals.filter((p) => p.status === filterStatus)
+  }, [allProposals, filterStatus])
 
-  const openCount = proposals.filter((p) => p.status === 'open').length
-  const resolvedCount = proposals.filter((p) => p.status === 'resolved').length
-
-  if (!mounted) return null
+  const openCount = allProposals.filter((p) => p.status === 'open').length
+  const resolvedCount = allProposals.filter((p) => p.status === 'resolved').length
 
   return (
     <div className="flex flex-col h-full">
@@ -516,7 +686,7 @@ export default function CouncilPage() {
             filterStatus === 'all' ? 'bg-zinc-800 text-zinc-200' : 'text-zinc-500 hover:text-zinc-300'
           )}
         >
-          All ({proposals.length})
+          All ({allProposals.length})
         </button>
         <button
           onClick={() => setFilterStatus('open')}
@@ -562,25 +732,32 @@ export default function CouncilPage() {
         </div>
       ) : (
         <div className="space-y-3 flex-1 overflow-y-auto pb-2">
-          {filteredProposals.map((proposal) => (
-            <ProposalCard
-              key={proposal.id}
-              proposal={proposal}
-              isExpanded={expandedId === proposal.id}
-              onToggle={() =>
-                setExpandedId(expandedId === proposal.id ? null : proposal.id)
-              }
-              onAddDebate={handleAddDebate}
-              onResolve={handleResolve}
-            />
-          ))}
+          {filteredProposals.map((proposal) => {
+            const linked = linkedProjectMap[proposal.id]
+            return (
+              <ProposalCard
+                key={proposal.id}
+                proposal={proposal}
+                debateEntries={debateEntriesByProposal[proposal.id] ?? []}
+                isExpanded={expandedId === proposal.id}
+                onToggle={() =>
+                  setExpandedId(expandedId === proposal.id ? null : proposal.id)
+                }
+                onAddDebate={handleAddDebate}
+                onResolve={handleResolve}
+                linkedProjectId={linked?.projectId}
+                linkedProjectName={linked?.projectName}
+                onCreateProject={handleCreateProject}
+                isCreatingProject={creatingProjectFor === proposal.id}
+              />
+            )
+          })}
         </div>
       )}
 
       <NewProposalDialog
         open={dialogOpen}
         onOpenChange={setDialogOpen}
-        onSubmit={handleNewProposal}
       />
     </div>
   )

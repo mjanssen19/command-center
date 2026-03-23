@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useMemo, useCallback, useSyncExternalStore } from 'react'
+import { useState, useMemo, useCallback, useSyncExternalStore, Suspense } from 'react'
+import { useSearchParams } from 'next/navigation'
 import {
   CheckSquare,
   Plus,
@@ -26,6 +27,7 @@ import { MetricCard } from '@/components/cards/MetricCard'
 import { EmptyState } from '@/components/common/EmptyState'
 import { PaperclipOfflineBanner } from '@/components/common/PaperclipOfflineBanner'
 import { SourceBadge } from '@/components/common/SourceBadge'
+import { EntityLink } from '@/components/common/EntityLink'
 import { usePaperclip } from '@/lib/paperclip'
 import {
   useIssues,
@@ -40,7 +42,6 @@ import { useLocalCreate } from '@/lib/hooks/useLocalMutations'
 import { useLocalUpdate } from '@/lib/hooks/useLocalMutations'
 import { useMergedList } from '@/lib/hooks/useMergedData'
 import { cn } from '@/lib/utils/cn'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -243,12 +244,14 @@ function StateFlowIndicator() {
 function TaskCard({
   task,
   agents,
+  projectMap,
   activities,
   runs,
   onClick,
 }: {
   task: NormalizedTask
   agents: Record<string, { name: string; emoji?: string | null }>
+  projectMap: Record<string, string>
   activities: UnifiedActivityEvent[]
   runs: PaperclipRun[]
   onClick: () => void
@@ -305,19 +308,19 @@ function TaskCard({
       <div className="flex items-center gap-2 ml-3.5 flex-wrap">
         <SourceBadge source={task.source} />
         {task.projectId && (
-          <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-4">
-            {task.projectId.slice(0, 8)}
-          </Badge>
+          <EntityLink
+            type="project"
+            id={task.projectId}
+            label={projectMap[task.projectId] ?? task.projectId.slice(0, 8)}
+          />
         )}
-        {agentInfo && (
-          <div className="flex items-center gap-1">
-            <div className="w-4 h-4 rounded-full bg-indigo-600 flex items-center justify-center">
-              <span className="text-[8px] font-bold text-white">
-                {agentInfo.emoji ?? agentInfo.name.charAt(0).toUpperCase()}
-              </span>
-            </div>
-            <span className="text-[10px] text-zinc-500">{agentInfo.name}</span>
-          </div>
+        {agentInfo && task.assigneeId && (
+          <EntityLink
+            type="agent"
+            id={task.assigneeId}
+            label={agentInfo.name}
+            emoji={agentInfo.emoji}
+          />
         )}
         {task.dueDate && (
           <span className="text-[10px] text-zinc-500 flex items-center gap-0.5">
@@ -344,6 +347,7 @@ function KanbanColumn({
   color,
   tasks,
   agents,
+  projectMap,
   activities,
   runs,
   onTaskClick,
@@ -354,6 +358,7 @@ function KanbanColumn({
   color: string
   tasks: NormalizedTask[]
   agents: Record<string, { name: string; emoji?: string | null }>
+  projectMap: Record<string, string>
   activities: UnifiedActivityEvent[]
   runs: PaperclipRun[]
   onTaskClick: (task: NormalizedTask) => void
@@ -426,6 +431,7 @@ function KanbanColumn({
               <TaskCard
                 task={task}
                 agents={agents}
+                projectMap={projectMap}
                 activities={activities}
                 runs={runs}
                 onClick={() => onTaskClick(task)}
@@ -507,6 +513,7 @@ function ActivitySidebar({ activities }: { activities: UnifiedActivityEvent[] })
 function TaskDetailPanel({
   task,
   agents,
+  projectMap,
   activities,
   comments,
   companyId,
@@ -514,6 +521,7 @@ function TaskDetailPanel({
 }: {
   task: NormalizedTask
   agents: Record<string, { name: string; emoji?: string | null }>
+  projectMap: Record<string, string>
   activities: UnifiedActivityEvent[]
   comments: unknown[] | undefined
   companyId: string | undefined
@@ -625,15 +633,20 @@ function TaskDetailPanel({
                 {task.priority}
               </span>
             )}
-            {agentInfo && (
-              <span className="flex items-center gap-1 text-[10px] text-zinc-500">
-                {agentInfo.emoji ? (
-                  <span className="text-xs">{agentInfo.emoji}</span>
-                ) : (
-                  <User className="w-2.5 h-2.5" />
-                )}
-                {agentInfo.name}
-              </span>
+            {agentInfo && task.assigneeId && (
+              <EntityLink
+                type="agent"
+                id={task.assigneeId}
+                label={agentInfo.name}
+                emoji={agentInfo.emoji}
+              />
+            )}
+            {task.projectId && (
+              <EntityLink
+                type="project"
+                id={task.projectId}
+                label={projectMap[task.projectId] ?? task.projectId.slice(0, 8)}
+              />
             )}
             {task.dueDate && (
               <span className="flex items-center gap-1 text-[10px] text-zinc-500">
@@ -932,12 +945,14 @@ function NewTaskDialog({
 function TaskDetailPanelWrapper({
   task,
   agents,
+  projectMap,
   activities,
   companyId,
   onClose,
 }: {
   task: NormalizedTask
   agents: Record<string, { name: string; emoji?: string | null }>
+  projectMap: Record<string, string>
   activities: UnifiedActivityEvent[]
   companyId: string | undefined
   onClose: () => void
@@ -952,6 +967,7 @@ function TaskDetailPanelWrapper({
     <TaskDetailPanel
       task={task}
       agents={agents}
+      projectMap={projectMap}
       activities={activities}
       comments={comments as unknown[] | undefined}
       companyId={companyId}
@@ -963,6 +979,17 @@ function TaskDetailPanelWrapper({
 // ── Main Page ──
 
 export default function TasksPage() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center h-full text-zinc-500">Loading...</div>}>
+      <TasksPageContent />
+    </Suspense>
+  )
+}
+
+function TasksPageContent() {
+  const searchParams = useSearchParams()
+  const selectedParam = searchParams.get('selected')
+
   const { companyId, status: paperclipStatus } = usePaperclip()
   const { data: paperclipIssues, dataUpdatedAt } = useIssues(companyId)
   const { data: localIssues } = useLocalData<Record<string, unknown>>('issues')
@@ -1015,6 +1042,26 @@ export default function TasksPage() {
     }
     return map
   }, [localAgents, paperclipAgents])
+
+  // Build project name map
+  const projectMap = useMemo(() => {
+    const map: Record<string, string> = {}
+    if (localProjects) {
+      for (const p of localProjects) {
+        map[String(p.id ?? '')] = String(p.name ?? '')
+      }
+    }
+    return map
+  }, [localProjects])
+
+  // URL-based selection: derive from params without useEffect
+  const urlSelectedTask = useMemo(() => {
+    if (!selectedParam || allTasks.length === 0) return null
+    return allTasks.find((t) => t.id === selectedParam) ?? null
+  }, [selectedParam, allTasks])
+
+  // Effective selection: manual selection takes priority over URL
+  const activeTask = selectedTask ?? urlSelectedTask
 
   // Unified activity events: local activity_events + Paperclip activity
   const unifiedActivities = useMemo(() => {
@@ -1098,14 +1145,14 @@ export default function TasksPage() {
     return relativeTime(new Date(dataUpdatedAt).toISOString())
   }, [dataUpdatedAt])
 
-  // Keep selectedTask in sync with latest data
+  // Keep active selection in sync with latest data
   const currentSelectedTask = useMemo(() => {
-    if (!selectedTask) return null
+    if (!activeTask) return null
     const found = allTasks.find(
-      (t) => t.id === selectedTask.id && t.source === selectedTask.source
+      (t) => t.id === activeTask.id && t.source === activeTask.source
     )
-    return found ?? selectedTask
-  }, [selectedTask, allTasks])
+    return found ?? activeTask
+  }, [activeTask, allTasks])
 
   const hasNoData = allTasks.length === 0
 
@@ -1173,7 +1220,7 @@ export default function TasksPage() {
           </SelectContent>
         </Select>
         <div className="ml-auto flex items-center gap-1">
-          {selectedTask && (
+          {activeTask && (
             <Button
               variant="ghost"
               size="sm"
@@ -1227,6 +1274,7 @@ export default function TasksPage() {
                 color={col.color}
                 tasks={columnTasks[col.key] ?? []}
                 agents={agentMap}
+                projectMap={projectMap}
                 activities={unifiedActivities}
                 runs={allRuns ?? []}
                 onTaskClick={handleTaskClick}
@@ -1241,6 +1289,7 @@ export default function TasksPage() {
             <TaskDetailPanelWrapper
               task={currentSelectedTask}
               agents={agentMap}
+              projectMap={projectMap}
               activities={unifiedActivities}
               companyId={companyId}
               onClose={() => setSelectedTask(null)}

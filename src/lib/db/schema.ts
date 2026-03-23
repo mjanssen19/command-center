@@ -151,6 +151,16 @@ export function initSchema(db: Database.Database) {
       resolved_at TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS council_proposals (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'open',
+      recommendation TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      resolved_at TEXT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_documents_path ON documents(path);
     CREATE INDEX IF NOT EXISTS idx_documents_type ON documents(type);
     CREATE INDEX IF NOT EXISTS idx_memories_date ON memories(date);
@@ -162,7 +172,15 @@ export function initSchema(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status);
     CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status);
     CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status);
+    CREATE INDEX IF NOT EXISTS idx_council_proposals_status ON council_proposals(status);
   `)
+
+  // Migration: add linked_task column to schedule_jobs if missing
+  const scheduleColInfo = db.prepare("PRAGMA table_info(schedule_jobs)").all() as Array<{ name: string }>
+  const hasLinkedTask = scheduleColInfo.some((c) => c.name === 'linked_task')
+  if (!hasLinkedTask) {
+    db.exec("ALTER TABLE schedule_jobs ADD COLUMN linked_task TEXT")
+  }
 
   // FTS5 virtual table — separate exec because CREATE VIRTUAL TABLE
   // doesn't support IF NOT EXISTS in all SQLite builds the same way
