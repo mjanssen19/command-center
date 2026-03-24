@@ -26,8 +26,15 @@ const SOURCE_COLORS: Record<string, string> = {
   supermemory: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
 }
 
-function formatDate(dateStr: string): string {
+function safeDate(dateStr: string | undefined | null): Date {
+  if (!dateStr) return new Date(0)
   const d = new Date(dateStr)
+  return isNaN(d.getTime()) ? new Date(0) : d
+}
+
+function formatDate(dateStr: string): string {
+  const d = safeDate(dateStr)
+  if (d.getTime() === 0) return 'Unknown date'
   return d.toLocaleDateString('en-US', {
     weekday: 'long',
     year: 'numeric',
@@ -37,7 +44,8 @@ function formatDate(dateStr: string): string {
 }
 
 function formatTime(dateStr: string): string {
-  const d = new Date(dateStr)
+  const d = safeDate(dateStr)
+  if (d.getTime() === 0) return '--:--'
   return d.toLocaleTimeString('en-US', {
     hour: '2-digit',
     minute: '2-digit',
@@ -45,7 +53,9 @@ function formatTime(dateStr: string): string {
 }
 
 function dayKey(dateStr: string): string {
-  return new Date(dateStr).toISOString().slice(0, 10)
+  const d = safeDate(dateStr)
+  if (d.getTime() === 0) return '1970-01-01'
+  return d.toISOString().slice(0, 10)
 }
 
 function parseTags(tags: unknown): string[] {
@@ -146,44 +156,58 @@ function useExternalMemories() {
     let cancelled = false
 
     async function load() {
-      // Fetch both in parallel
-      const [mem0Res, smRes] = await Promise.allSettled([
-        fetch('/api/integrations?type=mem0').then((r) => (r.ok ? r.json() : [])),
-        fetch('/api/integrations?type=supermemory').then((r) => (r.ok ? r.json() : [])),
-      ])
+      try {
+        // Fetch both in parallel, catch all errors
+        const [mem0Res, smRes] = await Promise.allSettled([
+          fetch('/api/integrations?type=mem0')
+            .then((r) => (r.ok ? r.json() : []))
+            .catch(() => []),
+          fetch('/api/integrations?type=supermemory')
+            .then((r) => (r.ok ? r.json() : []))
+            .catch(() => []),
+        ])
 
-      if (cancelled) return
+        if (cancelled) return
 
-      const mem0Data: Mem0Memory[] =
-        mem0Res.status === 'fulfilled' ? (mem0Res.value as Mem0Memory[]) : []
-      const smData: SupermemoryItem[] =
-        smRes.status === 'fulfilled' ? (smRes.value as SupermemoryItem[]) : []
+        const mem0Raw = mem0Res.status === 'fulfilled' ? mem0Res.value : []
+        const smRaw = smRes.status === 'fulfilled' ? smRes.value : []
 
-      // Convert Mem0 to Memory shape
-      setMem0(
-        mem0Data.map((m) => ({
-          id: `mem0-${m.id}`,
-          date: m.created_at?.slice(0, 10) ?? '',
-          type: 'observation',
-          source: 'Mem0',
-          content: m.content,
-          tags: [],
-          createdAt: m.created_at ?? new Date().toISOString(),
-        }))
-      )
+        // Ensure we have arrays
+        const mem0Data: Mem0Memory[] = Array.isArray(mem0Raw) ? mem0Raw : []
+        const smData: SupermemoryItem[] = Array.isArray(smRaw) ? smRaw : []
 
-      // Convert Supermemory to Memory shape
-      setSupermemory(
-        smData.map((m) => ({
-          id: `sm-${m.id}`,
-          date: m.created_at?.slice(0, 10) ?? '',
-          type: 'observation',
-          source: 'Supermemory',
-          content: m.content,
-          tags: [],
-          createdAt: m.created_at ?? new Date().toISOString(),
-        }))
-      )
+        // Convert Mem0 to Memory shape
+        if (!cancelled) {
+          setMem0(
+            mem0Data.map((m) => ({
+              id: `mem0-${m.id}`,
+              date: m.created_at?.slice(0, 10) ?? '',
+              type: 'observation',
+              source: 'Mem0',
+              content: m.content ?? '',
+              tags: [],
+              createdAt: m.created_at ?? new Date().toISOString(),
+            }))
+          )
+        }
+
+        // Convert Supermemory to Memory shape
+        if (!cancelled) {
+          setSupermemory(
+            smData.map((m) => ({
+              id: `sm-${m.id}`,
+              date: m.created_at?.slice(0, 10) ?? '',
+              type: 'observation',
+              source: 'Supermemory',
+              content: m.content ?? '',
+              tags: [],
+              createdAt: m.created_at ?? new Date().toISOString(),
+            }))
+          )
+        }
+      } catch {
+        // Silently ignore all integration errors
+      }
     }
 
     load()
