@@ -20,6 +20,7 @@ import {
   GitBranch,
   MessageSquare,
   Settings,
+  Package,
 } from 'lucide-react'
 import { SidebarItem } from './SidebarItem'
 
@@ -59,6 +60,12 @@ const navGroups = [
       { href: '/pipeline', icon: GitBranch, label: 'Pipeline' },
       { href: '/feedback', icon: MessageSquare, label: 'Feedback' },
       { href: '/system', icon: Settings, label: 'System' },
+    ],
+  },
+  {
+    label: 'Marketplace',
+    items: [
+      { href: '/clawhub', icon: Package, label: 'ClawHub' },
     ],
   },
 ]
