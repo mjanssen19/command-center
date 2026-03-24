@@ -48,9 +48,18 @@ function dayKey(dateStr: string): string {
   return new Date(dateStr).toISOString().slice(0, 10)
 }
 
+function parseTags(tags: unknown): string[] {
+  if (Array.isArray(tags)) return tags
+  if (typeof tags === 'string') {
+    try { const parsed = JSON.parse(tags); return Array.isArray(parsed) ? parsed : [] } catch { return [] }
+  }
+  return []
+}
+
 function MemoryEntry({ memory }: { memory: Memory }) {
   const typeBadge = TYPE_COLORS[memory.type] ?? TYPE_COLORS['observation']
   const sourceBadge = SOURCE_COLORS[memory.source?.toLowerCase()] ?? SOURCE_COLORS['local file']
+  const tags = parseTags(memory.tags)
 
   return (
     <div className="flex gap-3 py-3 px-4 hover:bg-zinc-800/40 transition-colors rounded-md group">
@@ -99,9 +108,8 @@ function MemoryEntry({ memory }: { memory: Memory }) {
               {memory.agentId.slice(0, 8)}
             </span>
           )}
-          {memory.tags &&
-            memory.tags.length > 0 &&
-            memory.tags.slice(0, 3).map((tag) => (
+          {tags.length > 0 &&
+            tags.slice(0, 3).map((tag) => (
               <span
                 key={tag}
                 className="inline-flex items-center gap-1 text-[10px] text-zinc-500 bg-zinc-800 rounded-full px-2 py-0.5"
@@ -210,7 +218,7 @@ export default function MemoryPage() {
         m.content?.toLowerCase().includes(q) ||
         m.type?.toLowerCase().includes(q) ||
         m.source?.toLowerCase().includes(q) ||
-        m.tags?.some((t) => t.toLowerCase().includes(q))
+        parseTags(m.tags).some((t) => t.toLowerCase().includes(q))
     )
   }, [allMemories, search])
 
@@ -357,9 +365,9 @@ export default function MemoryPage() {
                         <p className="text-xs text-zinc-300 leading-relaxed line-clamp-4">
                           {m.content?.slice(0, 200)}
                         </p>
-                        {m.tags && m.tags.length > 0 && (
+                        {parseTags(m.tags).length > 0 && (
                           <div className="flex gap-1 mt-1.5 flex-wrap">
-                            {m.tags.slice(0, 3).map((tag) => (
+                            {parseTags(m.tags).slice(0, 3).map((tag) => (
                               <span
                                 key={tag}
                                 className="text-[9px] text-zinc-500 bg-zinc-700/50 rounded px-1 py-0.5"
