@@ -8,25 +8,53 @@ import {
   Cpu,
   Edit3,
   Save,
-  ChevronRight,
-  ChevronDown,
 } from 'lucide-react'
 import { PageHeader } from '@/components/common/PageHeader'
 import { EmptyState } from '@/components/common/EmptyState'
-import { PaperclipOfflineBanner } from '@/components/common/PaperclipOfflineBanner'
+import { SourceBadge } from '@/components/common/SourceBadge'
 import { usePaperclip } from '@/lib/paperclip'
 import { useOrgChart, useAgents } from '@/lib/paperclip/hooks'
+import { useLocalData } from '@/lib/hooks/useLocalData'
 import { cn } from '@/lib/utils/cn'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
-import type { PaperclipOrgNode, PaperclipAgent } from '@/lib/paperclip/types'
+import type { PaperclipOrgNode } from '@/lib/paperclip/types'
+
+// ── Types ──
+
+interface TeamAgent {
+  id: string
+  name: string
+  emoji?: string
+  role: string
+  model: string
+  provider: string
+  status: string
+  adapterType: string
+  workspace?: string
+  lastHeartbeat?: string
+  source: 'local' | 'scanner' | 'paperclip'
+}
 
 const STATUS_CONFIG: Record<string, { dotColor: string; label: string }> = {
   active: { dotColor: 'bg-green-500', label: 'Active' },
+  idle: { dotColor: 'bg-blue-400', label: 'Idle' },
   paused: { dotColor: 'bg-amber-500', label: 'Paused' },
   error: { dotColor: 'bg-red-500', label: 'Error' },
   offline: { dotColor: 'bg-zinc-500', label: 'Offline' },
+}
+
+// ── Helpers ──
+
+const EMOJI_RE = /^(\p{Emoji_Presentation}|\p{Emoji}\uFE0F)/u
+
+function extractEmoji(role: string): { emoji: string | undefined; cleanRole: string } {
+  const match = role.match(EMOJI_RE)
+  if (match) {
+    return { emoji: match[0], cleanRole: role.slice(match[0].length).trim() }
+  }
+  return { emoji: undefined, cleanRole: role }
 }
 
 function relativeTime(dateStr?: string): string {
@@ -44,6 +72,8 @@ function getStoredMission(): string {
   if (typeof window === 'undefined') return ''
   return localStorage.getItem('cc-mission-statement') ?? ''
 }
+
+// ── Mission Statement ──
 
 function MissionStatement() {
   const [editing, setEditing] = useState(false)
@@ -63,24 +93,12 @@ function MissionStatement() {
           Mission Statement
         </h3>
         {editing ? (
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={handleSave}
-            className="text-green-400 hover:text-green-300 h-6 px-2"
-          >
-            <Save className="w-3 h-3 mr-1" />
-            Save
+          <Button size="sm" variant="ghost" onClick={handleSave} className="text-green-400 hover:text-green-300 h-6 px-2">
+            <Save className="w-3 h-3 mr-1" /> Save
           </Button>
         ) : (
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => setEditing(true)}
-            className="text-zinc-500 hover:text-zinc-300 h-6 px-2"
-          >
-            <Edit3 className="w-3 h-3 mr-1" />
-            Edit
+          <Button size="sm" variant="ghost" onClick={() => setEditing(true)} className="text-zinc-500 hover:text-zinc-300 h-6 px-2">
+            <Edit3 className="w-3 h-3 mr-1" /> Edit
           </Button>
         )}
       </div>
@@ -94,187 +112,77 @@ function MissionStatement() {
       ) : savedMission ? (
         <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">{savedMission}</p>
       ) : (
-        <p className="text-sm text-zinc-600 italic">
-          No mission statement defined. Click Edit to add one.
-        </p>
+        <p className="text-sm text-zinc-600 italic">No mission statement defined. Click Edit to add one.</p>
       )}
     </div>
   )
 }
 
-function OrgNodeCard({
-  node,
+// ── Agent Card ──
+
+function AgentCard({
   agent,
-  depth = 0,
+  selected,
   onSelect,
 }: {
-  node: PaperclipOrgNode
-  agent?: PaperclipAgent
-  depth?: number
-  onSelect: (agentId: string) => void
-}) {
-  const [expanded, setExpanded] = useState(depth < 2)
-  const hasChildren = node.children && node.children.length > 0
-  const status = agent?.status ?? 'offline'
-  const statusCfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.offline
-
-  return (
-    <div className={cn('pl-0', depth > 0 && 'ml-6 border-l border-zinc-800 pl-4')}>
-      <div className="flex items-start gap-3 py-2">
-        {/* Expand toggle */}
-        <button
-          onClick={() => hasChildren && setExpanded(!expanded)}
-          className={cn(
-            'w-5 h-5 rounded flex items-center justify-center shrink-0 mt-0.5',
-            hasChildren
-              ? 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'
-              : 'text-transparent cursor-default'
-          )}
-        >
-          {hasChildren &&
-            (expanded ? (
-              <ChevronDown className="w-3.5 h-3.5" />
-            ) : (
-              <ChevronRight className="w-3.5 h-3.5" />
-            ))}
-        </button>
-
-        {/* Node card */}
-        <button
-          onClick={() => onSelect(node.agentId)}
-          className="flex-1 text-left bg-zinc-900 border border-zinc-800 rounded-lg p-3 hover:border-zinc-700 hover:bg-zinc-800/30 transition-colors"
-        >
-          <div className="flex items-center gap-3">
-            {/* Avatar */}
-            <div className="w-9 h-9 rounded-lg bg-zinc-800 flex items-center justify-center shrink-0">
-              <span className="text-sm font-bold text-zinc-400">
-                {node.name.charAt(0).toUpperCase()}
-              </span>
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 mb-0.5">
-                <h4 className="text-sm font-medium text-zinc-200 truncate">{node.name}</h4>
-                <div className={cn('w-1.5 h-1.5 rounded-full shrink-0', statusCfg.dotColor)} />
-              </div>
-              <p className="text-xs text-zinc-500 truncate">{node.role}</p>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              {agent?.modelProvider && (
-                <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 text-zinc-500">
-                  <Cpu className="w-2.5 h-2.5 mr-0.5" />
-                  {agent.modelProvider}
-                </Badge>
-              )}
-              {agent?.lastHeartbeatAt && (
-                <span className="text-[10px] text-zinc-600 flex items-center gap-0.5">
-                  <Heart className="w-2.5 h-2.5" />
-                  {relativeTime(agent.lastHeartbeatAt)}
-                </span>
-              )}
-            </div>
-          </div>
-        </button>
-      </div>
-
-      {/* Children */}
-      {expanded && hasChildren && (
-        <div>
-          {node.children!.map((child) => (
-            <OrgNodeCard
-              key={child.agentId}
-              node={child}
-              agent={undefined}
-              depth={depth + 1}
-              onSelect={onSelect}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function FlatAgentList({
-  agents,
-  onSelect,
-}: {
-  agents: PaperclipAgent[]
-  onSelect: (agentId: string) => void
-}) {
-  return (
-    <div className="space-y-2">
-      {agents.map((agent) => {
-        const status = agent.status ?? 'offline'
-        const statusCfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.offline
-
-        return (
-          <button
-            key={agent.id}
-            onClick={() => onSelect(agent.id)}
-            className="w-full text-left bg-zinc-900 border border-zinc-800 rounded-lg p-3 hover:border-zinc-700 hover:bg-zinc-800/30 transition-colors flex items-center gap-3"
-          >
-            <div className="w-9 h-9 rounded-lg bg-zinc-800 flex items-center justify-center shrink-0">
-              <span className="text-sm font-bold text-zinc-400">
-                {agent.name.charAt(0).toUpperCase()}
-              </span>
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 mb-0.5">
-                <h4 className="text-sm font-medium text-zinc-200 truncate">{agent.name}</h4>
-                <div className={cn('w-1.5 h-1.5 rounded-full shrink-0', statusCfg.dotColor)} />
-              </div>
-              <p className="text-xs text-zinc-500 truncate">{agent.role}</p>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              {agent.modelProvider && (
-                <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 text-zinc-500">
-                  {agent.modelProvider}
-                </Badge>
-              )}
-              {agent.lastHeartbeatAt && (
-                <span className="text-[10px] text-zinc-600 flex items-center gap-0.5">
-                  <Heart className="w-2.5 h-2.5" />
-                  {relativeTime(agent.lastHeartbeatAt)}
-                </span>
-              )}
-            </div>
-          </button>
-        )
-      })}
-    </div>
-  )
-}
-
-function AgentDetailPanel({
-  agent,
-  onClose,
-}: {
-  agent: PaperclipAgent
-  onClose: () => void
+  agent: TeamAgent
+  selected: boolean
+  onSelect: () => void
 }) {
   const statusCfg = STATUS_CONFIG[agent.status] ?? STATUS_CONFIG.offline
 
   return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-5">
+    <button
+      onClick={onSelect}
+      className={cn(
+        'w-full text-left bg-zinc-900 border rounded-lg p-3 transition-colors flex items-center gap-3',
+        selected ? 'border-indigo-600 bg-zinc-800/50' : 'border-zinc-800 hover:border-zinc-700 hover:bg-zinc-800/30'
+      )}
+    >
+      {/* Avatar */}
+      <div className="w-10 h-10 rounded-lg bg-zinc-800 flex items-center justify-center shrink-0 text-lg">
+        {agent.emoji ?? agent.name.charAt(0).toUpperCase()}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 mb-0.5">
+          <h4 className="text-sm font-medium text-zinc-200 truncate">{agent.name}</h4>
+          <div className={cn('w-1.5 h-1.5 rounded-full shrink-0', statusCfg.dotColor)} />
+          <SourceBadge source={agent.source === 'scanner' ? 'openclaw' : agent.source} />
+        </div>
+        <p className="text-xs text-zinc-500 truncate">{agent.role}</p>
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        {agent.model && (
+          <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 text-zinc-500">
+            <Cpu className="w-2.5 h-2.5 mr-0.5" />
+            {agent.model.split('/').pop()}
+          </Badge>
+        )}
+      </div>
+    </button>
+  )
+}
+
+// ── Agent Detail ──
+
+function AgentDetail({ agent, onClose }: { agent: TeamAgent; onClose: () => void }) {
+  const statusCfg = STATUS_CONFIG[agent.status] ?? STATUS_CONFIG.offline
+
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-5 mb-4">
       <div className="flex items-start gap-4 mb-4">
-        <div className="w-12 h-12 rounded-lg bg-zinc-800 flex items-center justify-center shrink-0">
-          <span className="text-lg font-bold text-zinc-400">
-            {agent.name.charAt(0).toUpperCase()}
-          </span>
+        <div className="w-14 h-14 rounded-lg bg-zinc-800 flex items-center justify-center shrink-0 text-2xl">
+          {agent.emoji ?? agent.name.charAt(0).toUpperCase()}
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-0.5">
             <h3 className="text-base font-semibold text-zinc-100">{agent.name}</h3>
             <div className={cn('w-2 h-2 rounded-full', statusCfg.dotColor)} />
+            <SourceBadge source={agent.source === 'scanner' ? 'openclaw' : agent.source} />
           </div>
           <p className="text-sm text-zinc-400">{agent.role}</p>
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onClose}
-          className="text-zinc-500 hover:text-zinc-300 h-7 px-2"
-        >
+        <Button variant="ghost" size="sm" onClick={onClose} className="text-zinc-500 hover:text-zinc-300 h-7 px-2">
           Close
         </Button>
       </div>
@@ -284,33 +192,33 @@ function AgentDetailPanel({
           <p className="text-zinc-300">{statusCfg.label}</p>
         </div>
         <div>
-          <p className="text-[10px] text-zinc-600 uppercase tracking-wider mb-0.5">Heartbeat</p>
-          <p className="text-zinc-300">{relativeTime(agent.lastHeartbeatAt)}</p>
+          <p className="text-[10px] text-zinc-600 uppercase tracking-wider mb-0.5">Source</p>
+          <p className="text-zinc-300">{agent.source === 'scanner' ? 'OpenClaw (auto-discovered)' : agent.source}</p>
         </div>
         <div>
           <p className="text-[10px] text-zinc-600 uppercase tracking-wider mb-0.5">Model</p>
-          <p className="text-zinc-300">
-            {agent.modelProvider ?? 'Unknown'}/{agent.modelName ?? 'unknown'}
-          </p>
+          <p className="text-zinc-300">{agent.model || 'Not set'}</p>
+        </div>
+        <div>
+          <p className="text-[10px] text-zinc-600 uppercase tracking-wider mb-0.5">Provider</p>
+          <p className="text-zinc-300">{agent.provider || 'Not set'}</p>
         </div>
         <div>
           <p className="text-[10px] text-zinc-600 uppercase tracking-wider mb-0.5">Adapter</p>
           <p className="text-zinc-300">{agent.adapterType}</p>
         </div>
-        {agent.monthlySpend !== undefined && (
+        {agent.lastHeartbeat && (
           <div>
-            <p className="text-[10px] text-zinc-600 uppercase tracking-wider mb-0.5">
-              Monthly Cost
+            <p className="text-[10px] text-zinc-600 uppercase tracking-wider mb-0.5">Heartbeat</p>
+            <p className="text-zinc-300 flex items-center gap-1">
+              <Heart className="w-3 h-3" /> {relativeTime(agent.lastHeartbeat)}
             </p>
-            <p className="text-zinc-300">${agent.monthlySpend.toFixed(2)}</p>
           </div>
         )}
-        {agent.currentTaskId && (
-          <div>
-            <p className="text-[10px] text-zinc-600 uppercase tracking-wider mb-0.5">
-              Current Task
-            </p>
-            <p className="text-zinc-300 truncate">{agent.currentTaskId}</p>
+        {agent.workspace && (
+          <div className="col-span-2">
+            <p className="text-[10px] text-zinc-600 uppercase tracking-wider mb-0.5">Workspace</p>
+            <p className="text-zinc-400 text-xs font-mono truncate">{agent.workspace}</p>
           </div>
         )}
       </div>
@@ -318,103 +226,223 @@ function AgentDetailPanel({
   )
 }
 
+// ── Org Tree (Paperclip) ──
+
+function OrgNodeCard({
+  node,
+  depth = 0,
+  onSelect,
+}: {
+  node: PaperclipOrgNode
+  depth?: number
+  onSelect: (agentId: string) => void
+}) {
+  const [expanded, setExpanded] = useState(depth < 2)
+  const hasChildren = node.children && node.children.length > 0
+
+  return (
+    <div className={cn('pl-0', depth > 0 && 'ml-6 border-l border-zinc-800 pl-4')}>
+      <button
+        onClick={() => hasChildren ? setExpanded(!expanded) : onSelect(node.agentId)}
+        className="w-full text-left flex items-center gap-3 py-2 px-2 rounded hover:bg-zinc-800/30 transition-colors"
+      >
+        <div className="w-7 h-7 rounded bg-zinc-800 flex items-center justify-center shrink-0 text-xs font-bold text-zinc-400">
+          {node.name.charAt(0).toUpperCase()}
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm text-zinc-200 truncate">{node.name}</p>
+          <p className="text-[10px] text-zinc-500 truncate">{node.role}</p>
+        </div>
+        <SourceBadge source="paperclip" />
+      </button>
+      {expanded && hasChildren && (
+        <div>
+          {node.children!.map((child) => (
+            <OrgNodeCard key={child.agentId} node={child} depth={depth + 1} onSelect={onSelect} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Main Page ──
+
 export default function TeamPage() {
-  const { companyId, status: paperclipStatus, company } = usePaperclip()
+  const { companyId, status: paperclipStatus } = usePaperclip()
   const { data: orgNodes } = useOrgChart(companyId)
-  const { data: agents } = useAgents(companyId)
+  const { data: paperclipAgents } = useAgents(companyId)
+  const { data: localAgentsRaw } = useLocalData<Record<string, unknown>>('agents')
+
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
 
-  const isOffline = paperclipStatus === 'disconnected'
-  const hasOrgData = orgNodes && orgNodes.length > 0
-  const hasAgents = agents && agents.length > 0
-
-  const agentMap = useMemo(() => {
-    const map: Record<string, PaperclipAgent> = {}
-    if (agents) {
-      for (const a of agents) {
-        map[a.id] = a
+  // Normalize local agents
+  const localAgents: TeamAgent[] = useMemo(() => {
+    if (!localAgentsRaw) return []
+    return localAgentsRaw.map((a) => {
+      const rawRole = String(a.role ?? '')
+      const { emoji, cleanRole } = extractEmoji(rawRole)
+      return {
+        id: String(a.id),
+        name: String(a.name ?? 'Unknown'),
+        emoji,
+        role: cleanRole || 'Agent',
+        model: String(a.model ?? ''),
+        provider: String(a.provider ?? ''),
+        status: String(a.status ?? 'idle'),
+        adapterType: String(a.adapter_type ?? 'openclaw'),
+        workspace: a.config_path ? String(a.config_path) : undefined,
+        lastHeartbeat: a.last_heartbeat_at ? String(a.last_heartbeat_at) : undefined,
+        source: (String(a.source ?? 'local') as 'local' | 'scanner'),
       }
-    }
-    return map
-  }, [agents])
+    })
+  }, [localAgentsRaw])
 
-  const selectedAgent = selectedAgentId ? agentMap[selectedAgentId] : undefined
+  // Normalize Paperclip agents
+  const pcAgents: TeamAgent[] = useMemo(() => {
+    if (!paperclipAgents) return []
+    return paperclipAgents.map((a) => ({
+      id: `pc-${a.id}`,
+      name: a.name,
+      role: a.role,
+      model: a.modelName ?? '',
+      provider: a.modelProvider ?? '',
+      status: a.status ?? 'offline',
+      adapterType: a.adapterType ?? 'paperclip',
+      lastHeartbeat: a.lastHeartbeatAt,
+      source: 'paperclip' as const,
+    }))
+  }, [paperclipAgents])
+
+  // Group agents
+  const openclawAgents = localAgents.filter((a) => a.source === 'scanner')
+  const manualAgents = localAgents.filter((a) => a.source === 'local')
+  const hasOrgData = orgNodes && orgNodes.length > 0
+  const totalAgents = localAgents.length + pcAgents.length
+
+  // Find selected agent across all sources
+  const allAgents = [...localAgents, ...pcAgents]
+  const selectedAgent = selectedAgentId ? allAgents.find((a) => a.id === selectedAgentId) : undefined
+
+  // Get default model from OpenClaw agents
+  const defaultModel = openclawAgents.length > 0 ? openclawAgents[0].model : null
 
   return (
     <div>
       <PageHeader
         title="Team"
-        description="View your agent org structure, hierarchy, responsibilities, capabilities, and runtime placement."
+        description="Your agent organization, hierarchy, and capabilities."
       />
 
-      <PaperclipOfflineBanner />
-
-      {/* Mission Statement */}
       <MissionStatement />
 
-      {/* Agent detail panel */}
-      {selectedAgent && (
-        <div className="mb-4">
-          <AgentDetailPanel agent={selectedAgent} onClose={() => setSelectedAgentId(null)} />
+      {/* Model info */}
+      {defaultModel && (
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3 mb-4 flex items-center gap-2">
+          <Cpu className="w-4 h-4 text-zinc-500" />
+          <span className="text-xs text-zinc-400">Default model:</span>
+          <span className="text-xs text-zinc-200 font-mono">{defaultModel}</span>
         </div>
       )}
 
-      {/* Org visualization */}
-      {isOffline && !hasAgents ? (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-lg">
-          <EmptyState
-            icon={Network}
-            title="Paperclip is offline"
-            description="The org structure is powered by Paperclip. Connect to Paperclip to view your agent hierarchy."
-          />
-        </div>
-      ) : hasOrgData ? (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
-          <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3">
-            Organization Structure
-          </h3>
-          {/* Company root node */}
-          {company && (
-            <div className="flex items-center gap-2 mb-3 px-1">
-              <div className="w-6 h-6 rounded bg-indigo-600 flex items-center justify-center">
-                <span className="text-[10px] font-bold text-white">
-                  {company.name.charAt(0).toUpperCase()}
-                </span>
-              </div>
-              <span className="text-sm font-medium text-zinc-200">{company.name}</span>
-            </div>
-          )}
-          <div>
-            {orgNodes.map((node) => (
-              <OrgNodeCard
-                key={node.agentId}
-                node={node}
-                agent={agentMap[node.agentId]}
-                depth={0}
-                onSelect={setSelectedAgentId}
+      {/* Selected agent detail */}
+      {selectedAgent && (
+        <AgentDetail agent={selectedAgent} onClose={() => setSelectedAgentId(null)} />
+      )}
+
+      {/* OpenClaw Agents (primary) */}
+      {openclawAgents.length > 0 && (
+        <div className="mb-6">
+          <div className="flex items-center gap-2 mb-3">
+            <Bot className="w-3.5 h-3.5 text-emerald-500" />
+            <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
+              OpenClaw Agents
+            </h3>
+            <span className="text-[10px] text-zinc-600">({openclawAgents.length})</span>
+          </div>
+          <div className="space-y-2">
+            {openclawAgents.map((agent) => (
+              <AgentCard
+                key={agent.id}
+                agent={agent}
+                selected={selectedAgentId === agent.id}
+                onSelect={() => setSelectedAgentId(agent.id)}
               />
             ))}
           </div>
         </div>
-      ) : hasAgents ? (
-        <div>
+      )}
+
+      {/* Manual Agents */}
+      {manualAgents.length > 0 && (
+        <div className="mb-6">
           <div className="flex items-center gap-2 mb-3">
             <Bot className="w-3.5 h-3.5 text-zinc-500" />
             <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
-              Agent List
+              Registered Agents
             </h3>
-            <span className="text-[10px] text-zinc-600">
-              (No hierarchy data — showing flat list)
-            </span>
+            <span className="text-[10px] text-zinc-600">({manualAgents.length})</span>
           </div>
-          <FlatAgentList agents={agents} onSelect={setSelectedAgentId} />
+          <div className="space-y-2">
+            {manualAgents.map((agent) => (
+              <AgentCard
+                key={agent.id}
+                agent={agent}
+                selected={selectedAgentId === agent.id}
+                onSelect={() => setSelectedAgentId(agent.id)}
+              />
+            ))}
+          </div>
         </div>
-      ) : (
+      )}
+
+      {/* Paperclip Org (overlay) */}
+      {paperclipStatus === 'connected' && hasOrgData && (
+        <div className="mb-6">
+          <div className="flex items-center gap-2 mb-3">
+            <Network className="w-3.5 h-3.5 text-violet-500" />
+            <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
+              Paperclip Org Chart
+            </h3>
+          </div>
+          <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3">
+            {orgNodes.map((node) => (
+              <OrgNodeCard key={node.agentId} node={node} onSelect={setSelectedAgentId} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Paperclip flat agent list (if no org but agents exist) */}
+      {paperclipStatus === 'connected' && !hasOrgData && pcAgents.length > 0 && (
+        <div className="mb-6">
+          <div className="flex items-center gap-2 mb-3">
+            <Bot className="w-3.5 h-3.5 text-violet-500" />
+            <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
+              Paperclip Agents
+            </h3>
+            <span className="text-[10px] text-zinc-600">({pcAgents.length})</span>
+          </div>
+          <div className="space-y-2">
+            {pcAgents.map((agent) => (
+              <AgentCard
+                key={agent.id}
+                agent={agent}
+                selected={selectedAgentId === agent.id}
+                onSelect={() => setSelectedAgentId(agent.id)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Empty state */}
+      {totalAgents === 0 && (
         <div className="bg-zinc-900 border border-zinc-800 rounded-lg">
           <EmptyState
             icon={Network}
-            title="No agent hierarchy discovered"
-            description="The agent org structure will populate from Paperclip once connected. This shows top-level roles, sub-agents, capabilities, models, and machine placement."
+            title="No agents discovered"
+            description="Agents are auto-discovered from openclaw.json in your OpenClaw workspace. You can also register agents manually from the Agents screen."
           />
         </div>
       )}
