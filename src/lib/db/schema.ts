@@ -182,6 +182,19 @@ export function initSchema(db: Database.Database) {
     db.exec("ALTER TABLE schedule_jobs ADD COLUMN linked_task TEXT")
   }
 
+  // Migration: add emoji column to agents if missing
+  const agentColInfo = db.prepare("PRAGMA table_info(agents)").all() as Array<{ name: string }>
+  const hasEmoji = agentColInfo.some((c) => c.name === 'emoji')
+  if (!hasEmoji) {
+    db.exec("ALTER TABLE agents ADD COLUMN emoji TEXT DEFAULT ''")
+  }
+
+  // Migration: add channels column to agents if missing
+  const hasChannels = agentColInfo.some((c) => c.name === 'channels')
+  if (!hasChannels) {
+    db.exec("ALTER TABLE agents ADD COLUMN channels TEXT DEFAULT '[]'")
+  }
+
   // FTS5 virtual table — separate exec because CREATE VIRTUAL TABLE
   // doesn't support IF NOT EXISTS in all SQLite builds the same way
   const ftsExists = db

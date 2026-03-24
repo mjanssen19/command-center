@@ -25,7 +25,6 @@ import {
 import { PageHeader } from '@/components/common/PageHeader'
 import { MetricCard } from '@/components/cards/MetricCard'
 import { EmptyState } from '@/components/common/EmptyState'
-import { PaperclipOfflineBanner } from '@/components/common/PaperclipOfflineBanner'
 import { SourceBadge } from '@/components/common/SourceBadge'
 import { EntityLink } from '@/components/common/EntityLink'
 import { usePaperclip } from '@/lib/paperclip'
@@ -1179,7 +1178,6 @@ function TasksPageContent() {
         }
       />
 
-      <PaperclipOfflineBanner />
 
       {/* Metrics */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">

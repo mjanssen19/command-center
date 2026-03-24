@@ -4,6 +4,7 @@ import fs from 'fs'
 import path from 'path'
 import { v4 as uuid } from 'uuid'
 import { getDb } from '../db'
+import { discoverAgents } from './openclaw-config'
 
 const EXTENSIONS = ['**/*.md', '**/*.json', '**/*.yaml', '**/*.yml', '**/*.txt', '**/*.csv']
 const MAX_SUMMARY_LENGTH = 500
@@ -131,9 +132,9 @@ export async function scanWorkspace(): Promise<{ scanned: number; errors: string
 
   console.log(`[scanner] Scanned ${scanned} files, ${errors.length} errors`)
 
-  // Discover agents from openclaw.json after file scan
+  // Discover and sync agents from openclaw.json
   try {
-    await discoverAgents(workspacePath)
+    syncOpenClawAgents()
   } catch (err) {
     errors.push(
       `Agent discovery error: ${err instanceof Error ? err.message : String(err)}`
@@ -143,39 +144,7 @@ export async function scanWorkspace(): Promise<{ scanned: number; errors: string
   return { scanned, errors }
 }
 
-// --- Agent discovery from openclaw.json ---
-
-interface OpenClawAgentEntry {
-  id: string
-  name?: string
-  default?: boolean
-  workspace?: string
-  identity?: {
-    name?: string
-    emoji?: string
-  }
-}
-
-interface OpenClawBinding {
-  agentId: string
-  match?: {
-    channel?: string
-    accountId?: string
-  }
-}
-
-interface OpenClawConfig {
-  agents?: {
-    defaults?: {
-      model?: {
-        primary?: string
-      }
-      models?: Record<string, unknown>
-    }
-    list?: OpenClawAgentEntry[]
-  }
-  bindings?: OpenClawBinding[]
-}
+// --- Agent sync from openclaw-config ---
 
 /** Sanitize an ID for safe use as a SQLite primary key */
 function sanitizeId(raw: string): string {
@@ -183,65 +152,21 @@ function sanitizeId(raw: string): string {
 }
 
 /**
- * Discovers agents from openclaw.json in the workspace and upserts them
- * into the agents table with source='scanner'. Never overwrites agents
- * where source='local'.
+ * Discovers agents from openclaw.json and upserts them into the agents table.
+ * Only overwrites agents where source='scanner' (never touches source='local').
  */
-export async function discoverAgents(workspacePath: string): Promise<void> {
-  const configPath = path.join(workspacePath, 'openclaw.json')
+function syncOpenClawAgents(): void {
+  const agents = discoverAgents()
 
-  if (!fs.existsSync(configPath)) {
-    console.log('[scanner] No openclaw.json found, skipping agent discovery')
+  if (agents.length === 0) {
     return
-  }
-
-  let config: OpenClawConfig
-  try {
-    const raw = fs.readFileSync(configPath, 'utf-8')
-    config = JSON.parse(raw) as OpenClawConfig
-  } catch (err) {
-    console.error(
-      `[scanner] Failed to parse openclaw.json: ${err instanceof Error ? err.message : String(err)}`
-    )
-    return
-  }
-
-  // SECURITY: Only access agents.defaults.model, agents.defaults.models, agents.list, bindings
-  // NEVER read: channels, gateway, botToken, token, auth, apiKey, key, secret
-
-  if (!config.agents) {
-    console.log('[scanner] No agents section in openclaw.json, skipping agent discovery')
-    return
-  }
-
-  const defaultModel = config.agents.defaults?.model?.primary ?? 'unknown'
-  const bindings = config.bindings ?? []
-  let agentList = config.agents.list ?? []
-
-  // If agents.list is missing or empty, create one default agent
-  if (agentList.length === 0) {
-    agentList = [
-      {
-        id: 'default',
-        name: 'OpenClaw Agent',
-        default: true,
-      },
-    ]
-  }
-
-  // Build a lookup of agentId -> channel from bindings
-  const channelMap = new Map<string, string>()
-  for (const binding of bindings) {
-    if (binding.agentId && binding.match?.channel) {
-      channelMap.set(binding.agentId, binding.match.channel)
-    }
   }
 
   const db = getDb()
 
   const upsertAgent = db.prepare(`
-    INSERT INTO agents (id, name, role, model, provider, status, adapter_type, source, config_path, last_heartbeat_at, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'scanner', ?, NULL, datetime('now'))
+    INSERT INTO agents (id, name, role, model, provider, status, adapter_type, source, config_path, emoji, channels, last_heartbeat_at, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'scanner', ?, ?, ?, NULL, datetime('now'))
     ON CONFLICT(id) DO UPDATE SET
       name = excluded.name,
       role = excluded.role,
@@ -249,37 +174,41 @@ export async function discoverAgents(workspacePath: string): Promise<void> {
       provider = excluded.provider,
       status = excluded.status,
       adapter_type = excluded.adapter_type,
-      config_path = excluded.config_path
+      config_path = excluded.config_path,
+      emoji = excluded.emoji,
+      channels = excluded.channels
     WHERE source = 'scanner'
   `)
 
   let discovered = 0
 
-  for (const agent of agentList) {
-    if (!agent.id) continue
-
+  for (const agent of agents) {
     const id = `oc-${sanitizeId(agent.id)}`
-    const name = agent.identity?.name ?? agent.name ?? agent.id
-    const emoji = agent.identity?.emoji ?? ''
-    const channel = channelMap.get(agent.id)
+    const role = agent.isDefault ? 'Primary Agent' : 'Agent'
+    const model = agent.model ?? ''
+    const provider = model.includes('/') ? model.split('/')[0] : ''
+    const emoji = agent.emoji ?? ''
+    const channels = JSON.stringify(agent.channels ?? [])
 
-    // Build role string: emoji + default flag + channel info
-    const roleParts: string[] = []
-    if (emoji) roleParts.push(emoji)
-    if (agent.default) roleParts.push('Default Agent')
-    else roleParts.push('Agent')
-    if (channel) roleParts.push(`· ${channel.charAt(0).toUpperCase() + channel.slice(1)}`)
-    const role = roleParts.join(' ')
-
-    const adapterType = channel ?? 'openclaw'
-    const configPathValue = agent.workspace ?? null
-
-    upsertAgent.run(id, name, role, defaultModel, 'openclaw', 'idle', adapterType, configPathValue)
+    upsertAgent.run(
+      id,
+      agent.name,
+      role,
+      model,
+      provider,
+      'active',
+      'openclaw',
+      agent.workspace ?? null,
+      emoji,
+      channels
+    )
     discovered++
   }
 
-  console.log(`[scanner] Discovered ${discovered} agents from openclaw.json`)
+  console.log(`[scanner] Discovered ${discovered} OpenClaw agents`)
 }
+
+// --- Helpers ---
 
 function inferEntityType(filePath: string): string {
   const lower = filePath.toLowerCase()

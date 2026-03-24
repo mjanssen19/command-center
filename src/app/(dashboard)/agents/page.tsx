@@ -20,7 +20,6 @@ import {
 } from 'lucide-react'
 import { PageHeader } from '@/components/common/PageHeader'
 import { EmptyState } from '@/components/common/EmptyState'
-import { PaperclipOfflineBanner } from '@/components/common/PaperclipOfflineBanner'
 import { SourceBadge } from '@/components/common/SourceBadge'
 import { EntityLink } from '@/components/common/EntityLink'
 import { usePaperclip } from '@/lib/paperclip'
@@ -854,7 +853,6 @@ export default function AgentsPage() {
         }
       />
 
-      <PaperclipOfflineBanner />
 
       {hasNoData ? (
         <div className="bg-zinc-900 border border-zinc-800 rounded-lg">

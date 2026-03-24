@@ -14,7 +14,6 @@ import {
 } from 'lucide-react'
 import { PageHeader } from '@/components/common/PageHeader'
 import { EmptyState } from '@/components/common/EmptyState'
-import { PaperclipOfflineBanner } from '@/components/common/PaperclipOfflineBanner'
 import { SourceBadge } from '@/components/common/SourceBadge'
 import { usePaperclip } from '@/lib/paperclip'
 import { useApprovals, useApproveApproval, useRejectApproval } from '@/lib/paperclip/hooks'
@@ -604,7 +603,6 @@ export default function ApprovalsPage() {
         }
       />
 
-      <PaperclipOfflineBanner />
 
       {hasNoData ? (
         <div className="bg-zinc-900 border border-zinc-800 rounded-lg">
