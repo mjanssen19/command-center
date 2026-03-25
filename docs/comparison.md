@@ -5,7 +5,7 @@
 | | **Command Center** | **Paperclip** |
 |---|---|---|
 | **Tagline** | Local-first operational dashboard for OpenClaw | Control plane for autonomous AI companies |
-| **Status** | Design/spec phase (markdown docs + mockups of a running prototype called "Mission Control") | Shipping open-source product (v0.3.0, full codebase) |
+| **Status** | Deployed, open-source (18 screens, local-first with optional Paperclip overlay) | Shipping open-source product (v0.3.0, full codebase) |
 | **Core metaphor** | An operations console for one AI system | A company structure where agents are employees |
 
 Both solve the same fundamental problem: **giving visibility and control over autonomous AI agents** that would otherwise be opaque background processes.

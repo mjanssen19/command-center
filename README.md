@@ -1,29 +1,54 @@
 # Command Center
 
-Local-first operations dashboard for OpenClaw and Paperclip.
+Local-first operations dashboard for [OpenClaw](https://openclaw.ai). A premium command layer where autonomous AI work becomes visible, controllable, reviewable, and strategically useful.
 
 ## What is this?
 
-Command Center is a unified dashboard that brings together agent activity, task management, and local file indexing into a single interface. It connects to [Paperclip](https://github.com/mjanssen19/paperclip) for AI agent orchestration data and [OpenClaw](https://github.com/mjanssen19/openclaw) for local workspace file indexing, giving you a real-time view of everything happening across your projects.
+Command Center turns a fragmented OpenClaw setup into a coherent operational interface. One place to assign work, watch progress, inspect outputs, review decisions, browse memory, manage documents, and understand what your AI agents are doing.
 
-> Screenshots coming soon.
+**Everything works without Paperclip.** All 18 screens are fully functional with local SQLite storage. [Paperclip](https://github.com/openclaw/paperclip) is an optional read-only overlay that adds live agent execution data when connected.
+
+## Screens
+
+| Screen | Description |
+|---|---|
+| **Tasks** | Kanban board (Backlog / In Progress / Review / Done) with metrics, filters, and task detail panel |
+| **Agents** | Agent grid with status, heartbeat, model/cost display — auto-discovers from `openclaw.json` |
+| **Projects** | Project cards with progress, status, linked tasks and docs |
+| **Approvals** | Approval queue with approve/reject actions |
+| **Team** | Org tree visualization with mission statement |
+| **Scheduling** | Schedule list with cron humanization and weekly grid |
+| **Memory** | Timeline view grouped by day with search, source badges, entity links |
+| **Docs** | Split-pane file browser with markdown preview and metadata |
+| **Calendar** | Month grid with multi-source events (tasks, schedules, external ICS) |
+| **Content** | Content pipeline (Idea / Draft / Review / Scheduled / Published) |
+| **Council** | Multi-agent decision surface with proposals and debate entries |
+| **People** | People tracking with roles, relationships, linked entities |
+| **Radar** | Monitored trends, signals, and opportunities |
+| **Factory** | Repeatable generation systems with pipeline steps |
+| **Pipeline** | Stage-based workflow boards |
+| **Feedback** | User feedback, agent self-critique, post-mortems |
+| **ClawHub** | Browse, search, and install skills from the ClawHub registry |
+| **System** | Health dashboard, integration status, indexing controls |
+
+## Agent Discovery
+
+Command Center automatically discovers OpenClaw agents from `openclaw.json` in your workspace. It reads agent names, IDs, emojis, models, and channel bindings. **Sensitive fields (bot tokens, API keys) are never read or stored.**
+
+If no `openclaw.json` exists, agents can be registered manually.
 
 ## Tech Stack
 
-- **Framework**: Next.js 15 (App Router)
-- **Language**: TypeScript
+- **Framework**: Next.js (App Router)
+- **Language**: TypeScript (strict)
 - **Styling**: Tailwind CSS + shadcn/ui
-- **Database**: SQLite (local-first)
+- **Database**: SQLite (better-sqlite3, local-first)
 - **Data fetching**: TanStack Query
-
-## Prerequisites
-
-- Node.js 20+
-- npm 10+
-
-Optional:
-- [Paperclip](https://github.com/mjanssen19/paperclip) — for agent data and task management
-- [OpenClaw](https://github.com/mjanssen19/openclaw) — for local file indexing
+- **Command palette**: cmdk
+- **Icons**: lucide-react
+- **Process manager**: PM2
+- **Network / auth**: Tailscale
+- **CI/CD**: GitHub Actions
 
 ## Quick Start
 
@@ -35,28 +60,35 @@ npm install
 npm run dev
 ```
 
-Then open [http://localhost:3000](http://localhost:3000).
+Open [http://localhost:3000](http://localhost:3000).
 
 ## Environment Variables
 
-See [`.env.example`](.env.example) for all available configuration options.
-
 | Variable | Required | Description |
 |---|---|---|
-| `PAPERCLIP_API_URL` | Yes | URL of your Paperclip instance (default: `http://localhost:3100`) |
-| `PAPERCLIP_API_KEY` | Yes | API key for Paperclip authentication |
-| `OPENCLAW_WORKSPACE_PATH` | Yes | Absolute path to the OpenClaw workspace directory |
-| `MEM0_API_KEY` | No | Mem0 integration key (Phase 9) |
-| `SUPERMEMORY_API_KEY` | No | Supermemory integration key (Phase 9) |
-| `CALENDAR_ICS_URL` | No | ICS calendar feed URL (Phase 9) |
+| `OPENCLAW_WORKSPACE_PATH` | Yes | Path to your OpenClaw workspace (for file indexing and agent discovery) |
+| `PAPERCLIP_API_URL` | No | Paperclip base URL (default: `http://localhost:3100`) |
+| `PAPERCLIP_API_KEY` | No | Paperclip API key |
+| `NEXT_PUBLIC_PAPERCLIP_WS_URL` | No | Paperclip WebSocket URL for real-time updates |
+| `MEM0_API_KEY` | No | Mem0 integration for memory |
+| `SUPERMEMORY_API_KEY` | No | Supermemory integration for memory |
+| `CALENDAR_ICS_URL` | No | External calendar ICS feed URL |
 
-## Deployment
+Only `OPENCLAW_WORKSPACE_PATH` is required. Everything else is optional.
 
-The app auto-deploys to the production server via GitHub Actions on every push to `main`. The server is accessible over Tailscale. See [`docs/server-setup.md`](docs/server-setup.md) for initial server configuration.
+## Server Deployment
 
-## Architecture
+The app auto-deploys via GitHub Actions on every push to `main`. The server is secured via Tailscale.
 
-See [`plan.md`](../plan.md) for the full phase breakdown and architectural decisions.
+See [`docs/install.md`](docs/install.md) for full installation instructions.
+
+## Documentation
+
+- [`docs/spec.md`](docs/spec.md) — Product vision and screen specifications
+- [`docs/plan.md`](docs/plan.md) — Architecture decisions, phases, tech stack
+- [`docs/implementation.md`](docs/implementation.md) — Step-by-step build guide
+- [`docs/comparison.md`](docs/comparison.md) — Command Center vs Paperclip analysis
+- [`docs/install.md`](docs/install.md) — Server installation guide
 
 ## License
 
